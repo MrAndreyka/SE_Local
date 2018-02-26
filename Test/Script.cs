@@ -39,38 +39,37 @@ class Program : MyGridProgram
      ----------------------------------------------------------------------*/
     Program()
     {
-        if (!Storage.StartsWith("SunRound_2") || Me.TerminalRunArgument == "null") return;
-        try
-        {
-            var ids = Storage.Split('\n');
-            var cou = ids.Length;
-            int i = 2;
-            TecSec = int.Parse(ids[i++]);
-            MinInDay = int.Parse(ids[i++]);
-
-            string s;
-            if (!string.IsNullOrWhiteSpace(ids[i]))
+        if (Storage.StartsWith("SunRound_2") && Me.TerminalRunArgument != "null")
+            try
             {
-                MotorX = GridTerminalSystem.GetBlockWithId(long.Parse(ids[i++])) as IMyMotorStator;
-                MotorY = GridTerminalSystem.GetBlockWithId(long.Parse(ids[i++])) as IMyMotorStator;
-                s = ids[i++];
-                if (!string.IsNullOrEmpty(s))
-                    Panel = GridTerminalSystem.GetBlockWithId(long.Parse(s)) as IMyTextPanel;
-                Data = new SunRound(ids, i);
-                i = 13;
-            }
-            else i = 5;
-            for (; i < cou; i++)
-                if (!string.IsNullOrEmpty(ids[i]))
-                {
-                    var sp = GridTerminalSystem.GetBlockWithId(long.Parse(ids[i])) as IMySolarPanel;
-                    if (sp != null) SolarPanels.Add(sp);
-                }
-            if (bool.Parse(ids[1])) Runtime.UpdateFrequency = UpdateFrequency.Update100;
-            Echo("Состояние востановлено");
-        }
-        catch (Exception e) { Echo("Error"); Me.CustomData += "\n\n" + e + "\n" + Storage; }
+                var ids = Storage.Split('\n');
+                var cou = ids.Length;
+                int i = 2;
+                TecSec = int.Parse(ids[i++]);
+                MinInDay = int.Parse(ids[i++]);
 
+                string s;
+                if (!string.IsNullOrWhiteSpace(ids[i]))
+                {
+                    MotorX = GridTerminalSystem.GetBlockWithId(long.Parse(ids[i++])) as IMyMotorStator;
+                    MotorY = GridTerminalSystem.GetBlockWithId(long.Parse(ids[i++])) as IMyMotorStator;
+                    s = ids[i++];
+                    if (!string.IsNullOrEmpty(s))
+                        Panel = GridTerminalSystem.GetBlockWithId(long.Parse(s)) as IMyTextPanel;
+                    Data = new SunRound(ids, i);
+                    i = 13;
+                }
+                else i = 5;
+                for (; i < cou; i++)
+                    if (!string.IsNullOrEmpty(ids[i]))
+                    {
+                        var sp = GridTerminalSystem.GetBlockWithId(long.Parse(ids[i])) as IMySolarPanel;
+                        if (sp != null) SolarPanels.Add(sp);
+                    }
+                if (bool.Parse(ids[1])) Runtime.UpdateFrequency = UpdateFrequency.Update100;
+                Echo("Состояние востановлено");
+            }
+            catch (Exception e) { Echo("Error"); Me.CustomData += "\n\n" + e + "\n" + Storage; }
     }
 
     void Save()
@@ -98,7 +97,7 @@ class Program : MyGridProgram
     static SunRound Data = new SunRound();
     int TecMS = 0, TecSec = 0, MinInDay = 120, Del;
 
-    static IMyMotorStator MotorX, MotorY = null;
+    static IMyMotorStator MotorX, MotorY;
     static IMyTextPanel Panel = null;
     readonly List<IMySolarPanel> SolarPanels = new List<IMySolarPanel>();
 
@@ -106,13 +105,10 @@ class Program : MyGridProgram
     {
         TecMS += (int)Runtime.TimeSinceLastRun.TotalMilliseconds;
 
-        if (Type <= UpdateType.Trigger)
+        if (Type <= UpdateType.Update1 && !string.IsNullOrWhiteSpace(argument))
         {
-            if (!string.IsNullOrWhiteSpace(argument))
-            {
-                if (Panel != null) Panel.WritePublicText("");
-                SetAtributes(argument.Split(';'));
-            }
+            if (Panel != null) Panel.WritePublicText("");
+            SetAtributes(argument.Split(';'));
             return;
         }
 
@@ -127,20 +123,22 @@ class Program : MyGridProgram
         var Tgr = MathHelper.TwoPi / MinInDay * TecSec / 60;
         var vSun = Data.GetToSun(Tgr);
         Data.GetAngels(vSun, out X, out Z);
-        double Vel = X - MotorX.Angle;
+        float Vel = X - MotorX.Angle;
 
-        if (double.IsNaN(Vel)) Vel = 0;
+        if (float.IsNaN(Vel)) Vel = 0;
         if (Vel < -Math.PI) Vel += MathHelper.TwoPi;
         else if (Vel > Math.PI) Vel -= MathHelper.TwoPi;
 
-        MotorX.SetValue("Velocity", (Single)Vel * 4);
+        MotorX.TargetVelocityRad = Vel;
+        Echo("A " + Vel);
 
         Vel = Z - MotorY.Angle;
-        if (double.IsNaN(Vel)) Vel = 0;
+        if (float.IsNaN(Vel)) Vel = 0;
         if (Vel < -Math.PI) Vel += MathHelper.TwoPi;
         else if (Vel > Math.PI) Vel -= MathHelper.TwoPi;
 
-        MotorY.SetValue("Velocity", (Single)Vel * 4);
+        MotorY.TargetVelocityRad = Vel;
+        Echo("Z " + Vel);
 
         if (Panel != null && Del < 1)
         {
@@ -153,7 +151,7 @@ class Program : MyGridProgram
             {
                 float Pow = 0, Mpow = 0;
                 SolarPanels.ForEach(x => { Pow += x.CurrentOutput; Mpow += x.MaxOutput; });
-                s.AppendFormat("Мощность: {0:0.##} из {1:0.##}мВт\nМощность: {2:0.##} из {3:0.##}мВт\n",
+                s.AppendFormat("Мощность: {0:0.##}мВт ({1:0.##}кВт)\nМакс: {2:0.##}мВт ({3:0.##}кВт)",
                     Pow, SolarPanels[0].CurrentOutput * 1000, Mpow, SolarPanels[0].MaxOutput * 1000);
             }
             TextOut(s.ToString(), false, false);
@@ -281,7 +279,8 @@ class Program : MyGridProgram
                     {
                         if (string.IsNullOrEmpty(Right) || !int.TryParse(Right, out pos))
                         { TextOut("Ошиба значения тек. времени"); continue; }
-                        TextOut(string.Format("Текущее время установлено {0} сек.", TecSec = (int)(MathHelper.TwoPi / MinInDay / 60 * pos)));
+                        var val = MathHelper.ToRadians(pos);
+                        TextOut(string.Format("Текущее время установлено {0} сек.", TecSec = (int)(MinInDay * 60 /  MathHelper.TwoPi * val)));
                     }
                     break;
                 case "panels":
