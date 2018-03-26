@@ -1,128 +1,71 @@
-﻿using Sandbox.ModAPI.Interfaces;
-using Sandbox.ModAPI.Ingame;
-using Sandbox.Game.EntityComponents;
-using VRage.Game;
-using VRage.Game.Components;
-using VRage.Collections;
-using VRage.Game.ObjectBuilders.Definitions;
-using VRage.Game.ModAPI.Ingame;
-using SpaceEngineers.Game.ModAPI.Ingame;
-using VRageMath;
-using Sandbox.Game.Components;
-using VRage.Game.Localization;
-using System;
-using System.Text;
-using System.Collections;
-using System.Collections.Generic;
-using System.Linq;
+﻿/*----------------------------------------------------------------------  
+    AUTHOR: MrAndrey_ka (Ukraine Cherkassy) e-mail: Andrey.ck.ua@gmail.com  
+    When using and disseminating information about the authorship is obligatory  
+    При использовании и распространении информация об авторстве обязательна  
+    ----------------------------------------------------------------------*/
 
-class Program : MyGridProgram
-{
-    static System.Globalization.CultureInfo SYS = System.Globalization.CultureInfo.GetCultureInfoByIetfLanguageTag("RU");
-
-    Timer timer;
-    IMyTextPanel Txt = null;
-    Camers camers = new Camers();
-    static PID Rul = new PID();
-    static IMyShipController RemCon = null;
-    static MyDetectedEntityInfo Target;
-    static Vector3D TarPos = Vector3D.Zero;
-
+    IMyProgrammableBlock Pb;
+	IMyTextPanel Txt = null;
 
     Program()
     {
-        RemCon = new Selection(null).FindBlock<IMyShipController>(GridTerminalSystem);
-        if (RemCon == null) throw new Exception("Не найден блок управления");
+        string s = Me.CustomData;
+        if (string.IsNullOrWhiteSpace(s)) s = Me.TerminalRunArgument;
+        //if(string.IsNullOrWhiteSpace(s)) throw new Exception("Ожидаются параметры в CustomData");
+        var ars = s.Split(';');
 
-        new Selection(null).FindBlocks<IMyCameraBlock>(GridTerminalSystem, camers);
-        camers.ForEach(x => x.EnableRaycast = true);
-        
-        timer = new Timer(this);
-        GridTerminalSystem.GetBlocksOfType<IMyGyro>(Rul);
-        Rul.ForEach(x => x.GyroOverride = true);
+        if (ars.Length > 0)
+        {
+            Pb = new Selection(ars[0]).FindBlock<IMyProgrammableBlock>(GridTerminalSystem);
+            if (Pb == null) Echo($"Не найден програмный блок \"{ars[0]}\"");
+        }
 
-        Txt = new Selection(null).FindBlock<IMyTextPanel>(GridTerminalSystem);
+        if (ars.Length > 1)
+        {
+            Txt = new Selection(ars[1]).FindBlock<IMyTextPanel>(GridTerminalSystem);
+            if (Txt == null) Echo($"Не найдена панель \"{ars[1]}\"");
+        }
+
+        List<IMyCameraBlock> cams = new List<IMyCameraBlock>();
+        new Selection(null).FindBlocks<IMyCameraBlock>(GridTerminalSystem, cams);
+        cams.ForEach(x => x.EnableRaycast = true);
 
         Echo("Инициализировано");
     }
 
-
+ 
     void Main(string arg, UpdateType UT)
     {
+        // if (UT < UpdateType.Update1 && !string.IsNullOrWhiteSpace(arg)) { SetAtributes(arg); return; }
+
         try
         {
-            if (UT == UpdateType.Antenna) { NewTarget(arg); return; }
-            else if (UT < UpdateType.Update1 && !string.IsNullOrWhiteSpace(arg)) { SetAtributes(arg); return; }
+            if (Txt != null) Txt.WritePublicText("");
+            var cam = new Selection(null).FindBlock<IMyCameraBlock>(GridTerminalSystem, x => x.IsActive);
+            if (cam == null) { Mess("Активная камера не найдена"); return; }
 
-            if (Target.IsEmpty()) { timer.Stop(); return; }
+            int Dist = 10000;
+            if (string.IsNullOrWhiteSpace(arg)) if (!int.TryParse(arg, out Dist)) Dist = 10000;
+            Mess(MyGPS.GPS("Vector", cam.WorldMatrix.Forward, cam.GetPosition(), Dist));
 
-            var TarPos = Target.Position + Target.Velocity * Target.TimeStamp / 1000;
-            var cam = camers.GetCamera(TarPos);
-            if (cam != null)
-            {
-                Target = cam.Raycast(TarPos);
-                if (Target.Type != MyDetectedEntityType.LargeGrid && Target.Type != MyDetectedEntityType.SmallGrid)
-                    Target = new MyDetectedEntityInfo();
-                if (Target.IsEmpty()) { timer.Stop(); return; }
-            }
+            var Enty = cam.Raycast(Dist);
+            if (Enty.Type != MyDetectedEntityType.SmallGrid && Enty.Type != MyDetectedEntityType.LargeGrid) { Mess("Цель не найдена"); return; }
 
-            var Vdr = Rul.Rules();
-            Mess(string.Format("\nYaw: {0:0.00} Pitch: {1:0.00} Roll: {2:0.00}", MathHelper.ToDegrees(Vdr.X), MathHelper.ToDegrees(Vdr.Y), MathHelper.ToDegrees(Vdr.Z)));
+            Mess(string.Format("{0} ({1}) {2}\n{3}", Enty.Name, Enty.Type, Enty.Position, MyGPS.GPS("Цель", Enty.Position)), true);
+            var speek = new Selection(null).FindBlock<IMySoundBlock>(GridTerminalSystem);
+            if (speek != null) speek.Play();
 
-
+            if (Pb != null){ Pb.TryRun("Set:" + Enty.Position); return;}
+            var ant = new Selection(null).FindBlock<IMyRadioAntenna>(GridTerminalSystem);
+            if (ant == null) { Mess("Не найдены источники для передачи цели", true); return; }
+            if (!ant.TransmitMessage("Kill:" + Enty.Position)) Mess("Отправка сообщения не удалась", true);
+            else Mess("Отправка сообщения антеной -" + ant.CustomName, true);
         }
         catch (Exception e)
         {
             Echo(e.ToString());
             Me.CustomData += e.ToString();
         }
-    }
-
-    void SetAtributes(string arg, bool ShowInfo = false)
-    {
-        var param = EndCut(ref arg, ":");
-        switch (arg.ToLower())
-        {
-            case "?":
-                SetAtributes(param, true);
-                break;
-            case "target":
-                if (ShowInfo) Mess(Target.Type == MyDetectedEntityType.None? "Not found": MyGPS.GPS(Target.Name, Target.Position));
-                else
-                {
-                    Vector3D tmp;
-                    MyGPS.TryParseVers(param, out tmp);
-                    SetTarget(tmp);
-                }
-                break;
-            default: Echo("Команда не опознана: " + arg); break;
-        }
-    }
-
-    void NewTarget(string arg)
-    {
-        var ars = arg.Split(':');
-        if (ars.Length < 2) return;
-
-        if (ars[0] == "KillFree") { if (!Target.IsEmpty()) return; }
-        else if (ars[0] != "Kill") { Mess("Проигнорирована команда: " + arg); return; }
-        Vector3D tmp;
-        Vector3D.TryParse(ars[1], out tmp);
-
-        SetTarget(tmp);
-        Txt.CustomData += "\n" + tmp;
-    }
-
-     void SetTarget(Vector3D Targ)
-    {
-        if (Targ == Vector3D.Zero) return;
-        var cam = camers.GetCamera(Targ);
-        if (cam == null) { Txt.CustomData += "\nНет камеры для инициализации"; return; }
-        Target = cam.Raycast(Targ);
-        if (Target.Type != MyDetectedEntityType.LargeGrid && Target.Type != MyDetectedEntityType.SmallGrid)
-            Target = new MyDetectedEntityInfo();
-        if (Target.IsEmpty()) { timer.Stop(); return; }
-        else timer.SetInterval(960, true);
     }
 
     public void Mess(string text, bool consol = false)
@@ -141,68 +84,6 @@ class Program : MyGridProgram
     }
 
     //----------------   Classes  
-    public class PID : List<IMyGyro>
-    {
-        public Vector3 Rules()
-        {
-            Vector3 Vdr = Vector3D.Zero;
-
-            Vector3D vNap = Target.Position - RemCon.GetPosition();
-
-            Vdr.X = GetAngel(RemCon.WorldMatrix.Down, RemCon.WorldMatrix.Forward, vNap);
-            Vdr.Y = GetAngel(RemCon.WorldMatrix.Right, RemCon.WorldMatrix.Forward, vNap);
-
-            var abs = Vector3D.Abs(Vdr);
-            if (abs.X < 0.004f) Vdr.X = 0;
-            if (abs.Y < 0.004f) Vdr.Y = 0;
-
-            if (Vdr.X != 0 || Vdr.Y != 0 || Vdr.Z != 0) Drive(Vdr.X, Vdr.Y, Vdr.Z, RemCon.WorldMatrix);
-            return Vdr;
-        }
-        public void Drive(double yaw_speed, double pitch_speed, double roll_speed, MatrixD shipMatrix)
-        {
-            if (Count == 0) return;
-            var relativeRotationVec = Vector3D.TransformNormal(new Vector3D(-pitch_speed, yaw_speed, roll_speed), shipMatrix);
-            foreach (var thisGyro in this)
-            {
-                var transformedRotationVec = Vector3D.TransformNormal(relativeRotationVec, Matrix.Transpose(thisGyro.WorldMatrix));
-                thisGyro.GyroOverride = true;
-                // mes = string.Format("{0:0.000} {1:0.000} {2:0.000} {3}", thisGyro.Yaw, thisGyro.Pitch, thisGyro.Roll, transformedRotationVec.ToString("0.000"));
-                thisGyro.Pitch = (float)transformedRotationVec.X - (transformedRotationVec.X > 0.5 ? thisGyro.Pitch / 3 : 0);
-                thisGyro.Yaw = (float)transformedRotationVec.Y - (transformedRotationVec.Y > 0.5 ? thisGyro.Yaw / 3 : 0);
-                thisGyro.Roll = (float)transformedRotationVec.Z - (transformedRotationVec.Z > 0.5 ? thisGyro.Roll / 3 : 0);
-            }
-        }
-
-        /// <summary> 
-        ///  Расчитывает угол поворота 
-        /// </summary> 
-        /// <param name="Pl">Плоскость</param>
-        /// <param name="VDirect">Вектор поворота</param> 
-        /// <param name="Targ">Вектор цели</param> 
-        public static float GetAngel(Vector3D Pl, Vector3D VDirect, Vector3D Targ)
-        {
-            var tm = Vector3D.Reject(Targ, Pl);
-            var u = Math.Acos(VDirect.Dot(tm) / (VDirect.Length() * tm.Length()));
-            //return (float)(MyMath.AngleBetween(tm, Pl.Cross(VDirect)) > MathHelper.PiOver2 ? -u : u);
-            return (float)(tm.Dot(Pl.Cross(VDirect)) > 0 ? u : -u);
-        }
-    }
-
-    public class Camers : List<IMyCameraBlock>
-    {
-        int tec = 0;
-        public IMyCameraBlock GetCamera(Vector3D Pos)
-        {
-            if (Count == 0) return null;
-            if (!this[tec].CanScan(Pos)) return null;
-            var tc = this[tec];
-            if (!tc.IsWorking) { Remove(tc); return GetCamera(Pos); }
-            else if (++tec == Count) tec = 0;
-            return tc;
-        }
-    }
-
     public static class MyGPS
     {
         public static string GPS(string Name, Vector3D Val)
@@ -379,5 +260,3 @@ class Program : MyGridProgram
             return new Timer(gp, int.Parse(s[2]), int.Parse(s[0]), bool.Parse(s[1]));
         }
     }
-
-}
