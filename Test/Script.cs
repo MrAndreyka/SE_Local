@@ -69,7 +69,6 @@ class Program : MyGridProgram
             var Vdr = Rul.Rules();
             Mess(string.Format("\nYaw: {0:0.00} Pitch: {1:0.00} Roll: {2:0.00}", MathHelper.ToDegrees(Vdr.X), MathHelper.ToDegrees(Vdr.Y), MathHelper.ToDegrees(Vdr.Z)));
 
-
         }
         catch (Exception e)
         {
