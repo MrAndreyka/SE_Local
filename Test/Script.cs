@@ -21,12 +21,12 @@ class Program : MyGridProgram
     static System.Globalization.CultureInfo SYS = System.Globalization.CultureInfo.GetCultureInfoByIetfLanguageTag("RU");
 
     Timer timer;
-    IMyTextPanel Txt = null;
+    ShowMes Txt = new ShowMes();
     Camers camers = new Camers();
     static PID Rul = new PID();
     static IMyShipController RemCon = null;
     static MyDetectedEntityInfo Target;
-    static Vector3D TarPos = Vector3D.Zero;
+    long TimeSkan = 0;
 
 
     Program()
@@ -41,7 +41,7 @@ class Program : MyGridProgram
         GridTerminalSystem.GetBlocksOfType<IMyGyro>(Rul);
         Rul.ForEach(x => x.GyroOverride = true);
 
-        Txt = new Selection(null).FindBlock<IMyTextPanel>(GridTerminalSystem);
+        Txt.Txt = new Selection(null).FindBlock<IMyTextPanel>(GridTerminalSystem);
 
         Echo("Инициализировано");
     }
@@ -51,24 +51,51 @@ class Program : MyGridProgram
     {
         try
         {
-            if (UT == UpdateType.Antenna) { NewTarget(arg); return; }
-            else if (UT < UpdateType.Update1 && !string.IsNullOrWhiteSpace(arg)) { SetAtributes(arg); return; }
-
-            if (Target.IsEmpty()) { timer.Stop(); return; }
-
-            var TarPos = Target.Position + Target.Velocity * Target.TimeStamp / 1000;
-            var cam = camers.GetCamera(TarPos);
-            if (cam != null)
+            if (UT >= UpdateType.Update1)
             {
-                Target = cam.Raycast(TarPos);
-                if (Target.Type != MyDetectedEntityType.LargeGrid && Target.Type != MyDetectedEntityType.SmallGrid)
-                    Target = new MyDetectedEntityInfo();
                 if (Target.IsEmpty()) { timer.Stop(); return; }
+                Echo("*" + UT);
+                var tc = timer.Run();
+
+                if (tc == 0) return;
+                Txt.SetPoint();
+                TimeSkan += tc;
+                var TarPos = Target.Position + (Target.Velocity * ((float)TimeSkan / 960));
+                Txt.AddLine($"Speed: {Target.Velocity.Length()} * {(float)TimeSkan / 960}c.");
+                var cam = camers.GetCamera(TarPos);
+                if (cam != null)
+                {
+                    var Tar_ = cam.Raycast(TarPos);
+                    if (!Tar_.IsEmpty())
+                        if (Tar_.Type != MyDetectedEntityType.LargeGrid && Tar_.Type != MyDetectedEntityType.SmallGrid)
+                            Target = new MyDetectedEntityInfo();
+                        else
+                        {
+                            if (Target.TimeStamp == 1 && Target.Type == MyDetectedEntityType.Unknown) // Отправим сообщение
+                            {
+                                var ant = new Selection(null).FindBlock<IMyRadioAntenna>(GridTerminalSystem);
+                                if (ant != null && ant.TransmitMessage("OK" + Target.EntityId))
+                                    Txt.AddLine("Отправка сообщения OK : " + ant.CustomName).ToConsole = true;
+                            }
+                            TimeSkan = 0;
+                            Target = Tar_;
+                        }
+                }
+
+                if (Target.IsEmpty())
+                    { Txt.AddLine("Цель потеряна " + cam.CustomName + "\n" + MyGPS.GPS("Потеря цели", TarPos)).Added = true; timer.Stop(); return; }
+                else if (cam == null)
+                    Txt.AddLine("Камеры не готовы..." + (TimeSkan/960) + MyGPS.GPS("Ц" + Target.TimeStamp, TarPos));
+                else Txt.AddLine(cam.CustomName + "\n" + MyGPS.GPS(Target.Name, Target.Position - cam.GetPosition()));
+
+                var Vdr = Rul.Rules();
+                Txt.AddLine(string.Format("\nYaw: {0:0.00} Pitch: {1:0.00} Roll: {2:0.00}", MathHelper.ToDegrees(Vdr.X), MathHelper.ToDegrees(Vdr.Y), MathHelper.ToDegrees(Vdr.Z)));
+                Txt.Show(this);
             }
-
-            var Vdr = Rul.Rules();
-            Mess(string.Format("\nYaw: {0:0.00} Pitch: {1:0.00} Roll: {2:0.00}", MathHelper.ToDegrees(Vdr.X), MathHelper.ToDegrees(Vdr.Y), MathHelper.ToDegrees(Vdr.Z)));
-
+            else if (UT == UpdateType.Antenna)
+                AntenaMessage(arg);
+            else if (!string.IsNullOrWhiteSpace(arg))
+                SetAtributes(arg);
         }
         catch (Exception e)
         {
@@ -86,7 +113,7 @@ class Program : MyGridProgram
                 SetAtributes(param, true);
                 break;
             case "target":
-                if (ShowInfo) Mess(Target.Type == MyDetectedEntityType.None? "Not found": MyGPS.GPS(Target.Name, Target.Position));
+                if (ShowInfo) Txt.AddLine(Target.Type == MyDetectedEntityType.None? "Not found": MyGPS.GPS(Target.Name, Target.Position));
                 else
                 {
                     Vector3D tmp;
@@ -98,37 +125,44 @@ class Program : MyGridProgram
         }
     }
 
-    void NewTarget(string arg)
+    void AntenaMessage(string arg)
     {
-        var ars = arg.Split(':');
-        if (ars.Length < 2) return;
+        var ars = arg.Split('#');
+        if (ars.Length < 4) return;
+        bool isUpdate = false;
 
-        if (ars[0] == "KillFree") { if (!Target.IsEmpty()) return; }
-        else if (ars[0] != "Kill") { Mess("Проигнорирована команда: " + arg); return; }
-        Vector3D tmp;
-        Vector3D.TryParse(ars[1], out tmp);
+        if (ars[0] == "KillFree")
+            { if (!Target.IsEmpty()) return; }
+        else if (ars[0] == "NewPos")
+            if (!Target.IsEmpty()) return;
+            else isUpdate = true;
+        else if (ars[0] != "Kill")
+            { Txt.AddLine("Проигнорирована команда: " + arg).Show(this); return; }
 
-        SetTarget(tmp);
-        Txt.CustomData += "\n" + tmp;
+        var id = long.Parse(ars[1]);
+        if (isUpdate && id != Target.EntityId) return;
+        Vector3D tmp, vel;
+        Vector3D.TryParse(ars[2], out tmp);
+        Vector3D.TryParse(ars[3], out vel);
+        Target = new MyDetectedEntityInfo(id, "SetTerget", MyDetectedEntityType.Unknown, tmp, new MatrixD(), vel, MyRelationsBetweenPlayerAndBlock.Enemies, new BoundingBoxD(), 1);
+        TimeSkan = 0;
+        if (Txt.Txt!=null) Txt.Txt.CustomData += $"\n{arg}\n{MyGPS.GPS("o", tmp)}";
+        timer.SetInterval(960, true);
     }
 
      void SetTarget(Vector3D Targ)
     {
         if (Targ == Vector3D.Zero) return;
         var cam = camers.GetCamera(Targ);
-        if (cam == null) { Txt.CustomData += "\nНет камеры для инициализации"; return; }
+        if (cam == null) { Txt.AddLine("\nНет камеры для инициализации").ToConsole = true; return; }
         Target = cam.Raycast(Targ);
         if (Target.Type != MyDetectedEntityType.LargeGrid && Target.Type != MyDetectedEntityType.SmallGrid)
             Target = new MyDetectedEntityInfo();
         if (Target.IsEmpty()) { timer.Stop(); return; }
         else timer.SetInterval(960, true);
+        TimeSkan = 0;
     }
 
-    public void Mess(string text, bool consol = false)
-    {
-        if (consol || Txt == null) Echo(text);
-        if (Txt != null) Txt.WritePublicText(text+"\n", true);
-    }
     static string EndCut(ref string val, string tc, int cou = 1)
     {
         int pos = -1;
@@ -188,17 +222,46 @@ class Program : MyGridProgram
         }
     }
 
+    public class ShowMes
+    {
+        List<String> buf = new List<string>();
+        public IMyTextPanel Txt = null;
+        int curPoint = 0;
+        public bool ToConsole, Added = false;
+
+        public void SetPoint() { curPoint = buf.Count; }
+        public void Clear(bool all = false)
+        {
+            if (all) buf.Clear(); else buf.RemoveRange(0, curPoint);
+            ToConsole = false;
+            Added = false;
+        }
+        public void Show(MyGridProgram GS)
+        {
+            if (!Added) Clear();
+            var text = string.Join("", buf);
+            if (ToConsole || (Txt == null)) GS.Echo(text);
+            if (Txt != null) Txt.WritePublicText(text);
+        }
+        public void Show(MyGridProgram GS, bool ToConsole, bool Added)
+        {
+            this.Added = Added;
+            this.ToConsole = ToConsole;
+            Show(GS);
+        }
+
+        public ShowMes Add(string text) { buf.Add(text); return this; }
+        public ShowMes AddLine(string text) => Add(text + "\n");
+        public ShowMes AddFromLine(string text) => Add("\n" + text);
+
+    }
+
     public class Camers : List<IMyCameraBlock>
     {
-        int tec = 0;
         public IMyCameraBlock GetCamera(Vector3D Pos)
         {
             if (Count == 0) return null;
-            if (!this[tec].CanScan(Pos)) return null;
-            var tc = this[tec];
-            if (!tc.IsWorking) { Remove(tc); return GetCamera(Pos); }
-            else if (++tec == Count) tec = 0;
-            return tc;
+            return Find(x => x.CanScan(Pos));
         }
     }
 
@@ -334,7 +397,7 @@ class Program : MyGridProgram
         public static int CallFrequency(ref Point res)
         {
             int del;
-            if (res.X <= 960) { del = 16; res.Y = 1; }
+            if (res.X < 960) { del = 16; res.Y = 1; }
             else if (res.X < 4000) { del = 160; res.Y = 2; }
             else { del = 1600; res.Y = 4; }
             return del;
