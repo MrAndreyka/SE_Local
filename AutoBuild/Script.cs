@@ -195,9 +195,9 @@
             });
         }
 
-        void Moved(InvDT Inv, ref Dictionary<InvDT, List<MyInvItem>> tp, List<MyInvItem> Lims = null)
+        void Moved(InvDT Inv, ref Dictionary<InvDT, List<MyInvItem>> tp)
         {
-            if (Lims == null && stor.FindIndex(x => x.Inv.Equals(Inv) && x.Count == 0) >= 0) return;
+            if (stor.FindIndex(x => x.Inv.Equals(Inv) && x.Count == 0) >= 0) return;
             IMyInventoryItem p;
             List<IMyInventoryItem> inv = Inv.Inv.GetItems();
             if (inv.Count == 0) return;
@@ -207,34 +207,25 @@
             for (int j = inv.Count - 1; j >= 0; j--)
             {
                 if ((p = inv[j]).Amount == 0) continue;
-                MyInvItem Pi = new MyInvItem(p), tmp = null;
+                MyInvItem Pi = new MyInvItem(p);
                 int i = 0;
-
-                if (Lims != null)
-                {
-                    tmp = Lims.FindLast(z => z.Lnk.IsSuitable(Pi.Lnk));
-                    if (tmp == null || (tmp.Lnk.Type == 0 && tmp.count <= 0)) continue;
-                    Echo(tmp.ToString() + tmp.Lnk.Type);
-                    if (tmp.Lnk.Type != 0) Lims.Add(tmp = new MyInvItem(new MyInvIt(Pi.Lnk.Name, true), tmp.count));
-                }
 
                 while (stor.GetInv_Move(Pi.Lnk, Inv.Inv, ref i) >= 0 && p != null)
                 {
-                    if (tmp == null) res = stor[i].Inv.Inv.TransferItemFrom(Inv.Inv, j);
-                    else if (res = stor[i].Inv.Inv.TransferItemFrom(Inv.Inv, j, null, true, (int)tmp.count)) Pi.count = tmp.count;
+                    res = stor[i].Inv.Inv.TransferItemFrom(Inv.Inv, j);
+                    //else if (res = stor[i].Inv.Inv.TransferItemFrom(Inv.Inv, j, null, true, (int)tmp.count)) Pi.count = tmp.count;
 
-                    /*if (res) p = null;
-                    else */
-                    if ((p = Inv.Inv.GetItemByID(inv[j].ItemId)) != null) Pi.count -= (double)p.Amount;
+                    double cou = Pi.count - (((p = Inv.Inv.GetItemByID(inv[j].ItemId)) != null)? (double)p.Amount: 0);
+                    //Echo($"{p!=null} {Pi.count} / {(double)p.Amount}>{Inv}");
+                    Pi.count -= cou;
+                    
 
-                    if (Lims != null) tmp.count -= Pi.count;
-
-                    if (!tp.TryGetValue(stor[i].Inv, out TecL)) tp.Add(stor[i].Inv, new List<MyInvItem>() { Pi });
+                    if (!tp.TryGetValue(stor[i].Inv, out TecL)) tp.Add(stor[i].Inv, new List<MyInvItem>() { Pi.Clone(cou) });
                     else
                     {
                         var tm = TecL.Find(x => x.Lnk.Name == Pi.Lnk.Name);
-                        if (tm == null) TecL.Add(Pi);
-                        else tm.count += Pi.count;
+                        if (tm == null) TecL.Add(Pi.Clone(cou));
+                        else tm.count += cou;
                     }
                     i++;
                 }
@@ -1137,7 +1128,7 @@
                         && (this[i].Inv.Inv.MaxVolume - this[i].Inv.Inv.CurrentVolume).RawValue > 100)
                         return i;
                 }
-                return i = beg < Count ? beg : -1;
+                return i = -1;// beg < Count ? beg : -1;
             }
         }
 
