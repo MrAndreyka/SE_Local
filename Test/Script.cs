@@ -50,7 +50,7 @@ class Program : MyGridProgram
     void Main(string arg, UpdateType UT)
     {
         try
-        {
+        {Runtime.UpdateFrequency = UpdateFrequency.None == Runtime.UpdateFrequency?UpdateFrequency.Update100:UpdateFrequency.None;
             if (UT >= UpdateType.Update1)
             {
                 if (Target.IsEmpty()) { timer.Stop(); return; }
