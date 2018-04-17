@@ -63,6 +63,12 @@ To turn it back on:
             case "off":
                 enabled = false;
                 break;
+			case "avto":
+			{
+			Runtime.UpdateFrequency = UpdateFrequency.None == Runtime.UpdateFrequency?UpdateFrequency.Update100:UpdateFrequency.None;
+			Echo("Autorun is " + (Runtime.UpdateFrequency = UpdateFrequency.None?"disable":"enable"));
+			}
+                break;
         }
 
         List<IMyTerminalBlock> Blocks = new List<IMyTerminalBlock>();
