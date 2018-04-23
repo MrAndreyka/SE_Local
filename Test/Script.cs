@@ -445,6 +445,7 @@ class Program : MyGridProgram
 }
 
 
+
 using Sandbox.ModAPI.Interfaces;
 using Sandbox.ModAPI.Ingame;
 using Sandbox.Game.EntityComponents;
@@ -579,6 +580,8 @@ namespace P2
                         if (ant == null) Txt.AddLine("Не указана антена").ToConsole = true;
                         else if (!ant.TransmitMessage($"NewPos#{Target.EntityId}#{Target.Position}#{Target.Velocity}"))
                             Txt.AddLine("Не удалась отправка сообщения антеной -" + ant.CustomName).ToConsole = true;
+                        else
+                            Txt.AddLine("Отправлено сообщение антеной -" + ant.CustomName).ToConsole = true;
                     }
                 }
                 Txt.Show(this);
@@ -859,6 +862,7 @@ namespace P3
     {
 
         Follower Follower1;
+        static ShowMes txt = new ShowMes();
         Vector3D tecTarg;
 
         public Program()
@@ -871,6 +875,7 @@ namespace P3
             if (UT == UpdateType.Update100)
             {
                 Follower1 = new Follower(this);
+                txt.Txt = new Selection(null).FindBlock<IMyTextPanel>(GridTerminalSystem);
                 Runtime.UpdateFrequency = UpdateFrequency.Update1;
             }
             else if (UT == UpdateType.Update1)
@@ -880,10 +885,12 @@ namespace P3
                 //будем держать прицел на эту точку:
                 //GPS:Pennywise #2:-12976.41:50487.77:32242.19:
                 //Follower1.GoToPos(new Vector3D(-13010.66, 50598.2, 32509.12), new Vector3D(-12976.41, 50487.77, 32242.19));
+                txt.SetPoint();
                 if (!Vector3D.IsZero(tecTarg))
                 {
                     Follower1.GoToPos(tecTarg);
                 }
+                txt.Show(this);
             }
             else if (UT == UpdateType.Terminal && !string.IsNullOrWhiteSpace(arg))
             {
@@ -895,6 +902,7 @@ namespace P3
         public class Follower
         {
             static IMyShipController RemCon;
+            Vector3D acceleration;
             static Program ParentProgram;
             MyThrusters myThr;
             MyGyros myGyros;
@@ -906,6 +914,7 @@ namespace P3
                 ParentProgram = parenProg;
                 InitMainBlocks();
                 InitSubSystems();
+                acceleration = myThr.GetMaxSpeed();
             }
 
             private void InitMainBlocks()
@@ -966,24 +975,23 @@ namespace P3
                 {
                     myWeapons.Fire();
                 }
-
-
             }
 
             public void GoToPos(Vector3D Pos)
             {
-                Vector3D GravAccel = RemCon.GetNaturalGravity();
-                MatrixD MyMatrix = RemCon.WorldMatrix.GetOrientation();
                 //Расчитать расстояние до цели
-                Vector3D TargetVector = Pos - RemCon.GetPosition();
+                var TargetVector = Pos - RemCon.GetPosition();
+                var dist = TargetVector.Length();
+                //var dist = TargetVector.Length();
                 //Расчитать желаемую скорость
-                Vector3D DesiredVelocity = TargetVector * Math.Sqrt(2 / TargetVector.Length());
+                Vector3D DesiredVelocity = TargetVector * Math.Sqrt(2 * acceleration.AbsMin() / dist);
                 Vector3D VelocityDelta = DesiredVelocity - RemCon.GetShipVelocities().LinearVelocity;
                 //Расчитать желаемое ускорение
                 Vector3D DesiredAcceleration = VelocityDelta;
-                ParentProgram.Echo($"{TargetVector.Length()} {DesiredVelocity.Length()} {VelocityDelta.Length()}");
+                if (dist > 5) DesiredAcceleration *= acceleration.AbsMin() * 2;
+                 var ttt = VectorTransform(DesiredAcceleration -  RemCon.GetNaturalGravity(), RemCon.WorldMatrix.GetOrientation());
                 //Передаем желаемое ускорение с учетом гравитации движкам
-                myThr.SetThrA(VectorTransform(DesiredAcceleration - GravAccel, MyMatrix));
+                myThr.SetThrA(ttt);
             }
 
             public Vector3D VectorTransform(Vector3D Vec, MatrixD Orientation)
@@ -1089,20 +1097,39 @@ namespace P3
 
             private class MyThrusters : List<IMyThrust>
             {
-                Follower myBot;
-                List<IMyThrust> UpThrusters;
-                List<IMyThrust> DownThrusters;
-                List<IMyThrust> LeftThrusters;
-                List<IMyThrust> RightThrusters;
-                List<IMyThrust> ForwardThrusters;
-                List<IMyThrust> BackwardThrusters;
+                public class GroupThrusts : List<IMyThrust>
+                {
+                    public double EffectivePow { get; protected set; }
+                    new public void Add(IMyThrust val) { base.Add(val); EffectivePow += val.MaxEffectiveThrust; }
+                    new public void Clear() { EffectivePow = 0; base.Clear(); }
+                    public void Recalc() { EffectivePow = 0; ForEach(x => EffectivePow += x.MaxEffectiveThrust); }
+                }
 
-                double UpThrMax;
-                double DownThrMax;
-                double LeftThrMax;
-                double RightThrMax;
-                double ForwardThrMax;
-                double BackwardThrMax;
+                //Follower myBot;
+                GroupThrusts UpThrusters;
+                GroupThrusts DownThrusters;
+                GroupThrusts LeftThrusters;
+                GroupThrusts RightThrusters;
+                GroupThrusts ForwardThrusters;
+                GroupThrusts BackwardThrusters;
+
+                public struct ThrustsValue
+                {
+                    public double Max_pow, EffectivePow, CurrentPow;
+                    public void Add(IMyThrust val) { Max_pow += val.MaxThrust; EffectivePow += val.MaxEffectiveThrust; CurrentPow += val.CurrentThrust; }
+                    public void Clear() { Max_pow = 0; EffectivePow = 0; CurrentPow = 0; }
+                    public double TecCoof { get { return EffectivePow / Max_pow; } }
+                    public new string ToString() => $"M:{Max_pow} E:{EffectivePow}, C:{CurrentPow}";
+                }
+
+                public Vector3D GetMaxSpeed()
+                {
+                    var m= RemCon.CalculateShipMass().TotalMass;
+                    return new Vector3D(
+                        Math.Min(RightThrusters.EffectivePow, LeftThrusters.EffectivePow / m),
+                        Math.Min(UpThrusters.EffectivePow, DownThrusters.EffectivePow / m),
+                        Math.Min(ForwardThrusters.EffectivePow, BackwardThrusters.EffectivePow / m));
+                }
 
 
                 //переменные подсистемы двигателей
@@ -1113,24 +1140,30 @@ namespace P3
 
                 private void InitMainBlocks()
                 {
+                    UpThrusters = new GroupThrusts();
+                    DownThrusters = new GroupThrusts();
+                    LeftThrusters = new GroupThrusts();
+                    RightThrusters = new GroupThrusts();
+                    ForwardThrusters = new GroupThrusts();
+                    BackwardThrusters = new GroupThrusts();
+
+                    ReloadTrusters();
+                }
+
+                public void ReloadTrusters()
+                {
+                    UpThrusters.Clear();
+                    DownThrusters.Clear();
+                    LeftThrusters.Clear();
+                    RightThrusters.Clear();
+                    ForwardThrusters.Clear();
+                    BackwardThrusters.Clear();
+
                     Matrix ThrLocM = new Matrix();
                     Matrix MainLocM = new Matrix();
                     RemCon.Orientation.GetMatrix(out MainLocM);
 
-                    UpThrusters = new List<IMyThrust>();
-                    DownThrusters = new List<IMyThrust>();
-                    LeftThrusters = new List<IMyThrust>();
-                    RightThrusters = new List<IMyThrust>();
-                    ForwardThrusters = new List<IMyThrust>();
-                    BackwardThrusters = new List<IMyThrust>();
-                    UpThrMax = 0;
-                    DownThrMax = 0;
-                    LeftThrMax = 0;
-                    RightThrMax = 0;
-                    ForwardThrMax = 0;
-                    BackwardThrMax = 0;
-
-                    ParentProgram.GridTerminalSystem.GetBlocksOfType<IMyThrust>(this);
+                    ParentProgram.GridTerminalSystem.GetBlocksOfType<IMyThrust>(this, x=>x.IsWorking);
 
                     for (int i = 0; i < Count; i++)
                     {
@@ -1138,37 +1171,19 @@ namespace P3
                         Thrust.Orientation.GetMatrix(out ThrLocM);
                         //Y
                         if (ThrLocM.Backward == MainLocM.Up)
-                        {
                             UpThrusters.Add(Thrust);
-                            UpThrMax += Thrust.MaxEffectiveThrust;
-                        }
                         else if (ThrLocM.Backward == MainLocM.Down)
-                        {
                             DownThrusters.Add(Thrust);
-                            DownThrMax += Thrust.MaxEffectiveThrust;
-                        }
                         //X
                         else if (ThrLocM.Backward == MainLocM.Left)
-                        {
                             LeftThrusters.Add(Thrust);
-                            LeftThrMax += Thrust.MaxEffectiveThrust;
-                        }
                         else if (ThrLocM.Backward == MainLocM.Right)
-                        {
                             RightThrusters.Add(Thrust);
-                            RightThrMax += Thrust.MaxEffectiveThrust;
-                        }
                         //Z
                         else if (ThrLocM.Backward == MainLocM.Forward)
-                        {
                             ForwardThrusters.Add(Thrust);
-                            ForwardThrMax += Thrust.MaxEffectiveThrust;
-                        }
                         else if (ThrLocM.Backward == MainLocM.Backward)
-                        {
                             BackwardThrusters.Add(Thrust);
-                            BackwardThrMax += Thrust.MaxEffectiveThrust;
-                        }
                     }
                 }
 
@@ -1187,29 +1202,35 @@ namespace P3
                     //X
                     if (ThrVec.X > 0)
                     {
-                        SetGroupThrust(RightThrusters, (float)(ThrVec.X / RightThrMax));
+                        SetGroupThrust(RightThrusters, (float)(ThrVec.X / RightThrusters.EffectivePow));
+                        ParentProgram.Echo("R: " + ThrVec.X / RightThrusters.EffectivePow);
                     }
                     else
                     {
-                        SetGroupThrust(LeftThrusters, -(float)(ThrVec.X / LeftThrMax));
+                        SetGroupThrust(LeftThrusters, -(float)(ThrVec.X / LeftThrusters.EffectivePow));
+                        ParentProgram.Echo("L: " + (-ThrVec.X / LeftThrusters.EffectivePow));
                     }
                     //Y
                     if (ThrVec.Y > 0)
                     {
-                        SetGroupThrust(UpThrusters, (float)(ThrVec.Y / UpThrMax));
+                        SetGroupThrust(UpThrusters, (float)(ThrVec.Y / UpThrusters.EffectivePow));
+                        ParentProgram.Echo("U: " + ThrVec.Y / UpThrusters.EffectivePow);
                     }
                     else
                     {
-                        SetGroupThrust(DownThrusters, -(float)(ThrVec.Y / DownThrMax));
+                        SetGroupThrust(DownThrusters, -(float)(ThrVec.Y / DownThrusters.EffectivePow));
+                        ParentProgram.Echo("D: " + (-ThrVec.Y / DownThrusters.EffectivePow));
                     }
                     //Z
                     if (ThrVec.Z > 0)
                     {
-                        SetGroupThrust(BackwardThrusters, (float)(ThrVec.Z / BackwardThrMax));
+                        SetGroupThrust(BackwardThrusters, (float)(ThrVec.Z / BackwardThrusters.EffectivePow));
+                        ParentProgram.Echo("B: " + ThrVec.Z / BackwardThrusters.EffectivePow);
                     }
                     else
                     {
-                        SetGroupThrust(ForwardThrusters, -(float)(ThrVec.Z / ForwardThrMax));
+                        SetGroupThrust(ForwardThrusters, -(float)(ThrVec.Z / ForwardThrusters.EffectivePow));
+                        ParentProgram.Echo($"F: {-ThrVec.Z / ForwardThrusters.EffectivePow:0.0000} - {ForwardThrusters.EffectivePow:0.0000}");
                     }
                 }
                 public void SetThrA(Vector3D ThrVec)
@@ -1220,6 +1241,39 @@ namespace P3
 
 
             }
+
+        }
+        public class ShowMes
+        {
+            List<String> buf = new List<string>();
+            public IMyTextPanel Txt = null;
+            int curPoint = 0;
+            public bool ToConsole, Added = false;
+
+            public void SetPoint() { curPoint = buf.Count; }
+            public void Clear(bool all = false)
+            {
+                if (all) buf.Clear(); else buf.RemoveRange(0, curPoint);
+                ToConsole = false;
+                Added = false;
+            }
+            public void Show(MyGridProgram GS)
+            {
+                if (!Added) Clear();
+                var text = string.Join("", buf);
+                if (ToConsole || (Txt == null)) GS.Echo(text);
+                if (Txt != null) Txt.WritePublicText(text);
+            }
+            public void Show(MyGridProgram GS, bool ToConsole, bool Added)
+            {
+                this.Added = Added;
+                this.ToConsole = ToConsole;
+                Show(GS);
+            }
+
+            public ShowMes Add(string text) { buf.Add(text); return this; }
+            public ShowMes AddLine(string text) => Add(text + "\n");
+            public ShowMes AddFromLine(string text) => Add("\n" + text);
 
         }
 
