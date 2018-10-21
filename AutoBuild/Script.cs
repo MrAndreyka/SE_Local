@@ -1,8 +1,8 @@
 ﻿ /*----------------------------------------------------------------------    
-       AUTHOR: MrAndrey_ka (Ukraine Cherkassy) e-mail: Andrey.ck.ua@gmail.com    
-       When using and disseminating information about the authorship is obligatory    
-       При использовании и распространении информация об авторстве обязательна    
-       ----------------------------------------------------------------------*/
+      AUTHOR: MrAndrey_ka (Ukraine Cherkassy) e-mail: Andrey.ck.ua@gmail.com    
+      When using and disseminating information about the authorship is obligatory    
+      При использовании и распространении информация об авторстве обязательна    
+      ----------------------------------------------------------------------*/
 
         static System.Globalization.CultureInfo SYS = System.Globalization.CultureInfo.GetCultureInfoByIetfLanguageTag("RU");
         class Translate : Dictionary<String, string>
@@ -215,10 +215,10 @@
                     res = stor[i].Inv.Inv.TransferItemFrom(Inv.Inv, j);
                     //else if (res = stor[i].Inv.Inv.TransferItemFrom(Inv.Inv, j, null, true, (int)tmp.count)) Pi.count = tmp.count;
 
-                    double cou = Pi.count - (((p = Inv.Inv.GetItemByID(inv[j].ItemId)) != null)? (double)p.Amount: 0);
+                    double cou = Pi.count - (((p = Inv.Inv.GetItemByID(inv[j].ItemId)) != null) ? (double)p.Amount : 0);
                     //Echo($"{p!=null} {Pi.count} / {(double)p.Amount}>{Inv}");
                     Pi.count -= cou;
-                    
+
 
                     if (!tp.TryGetValue(stor[i].Inv, out TecL)) tp.Add(stor[i].Inv, new List<MyInvItem>() { Pi.Clone(cou) });
                     else
@@ -255,7 +255,7 @@
                             SetAtributes(b.CustomData);
                         }
                         break;
-                    case "panels":
+                    case "panels"://Добавление панелей с параметрами CD панели
                         {
                             var p2 = param.Split(':');
                             for (int i = 0; i < p2.Length; i++)
@@ -992,7 +992,7 @@
                 MyInvIt v;
                 if (Names.TryGetValue(val, out v)) return v;
 
-                string s = val.TypeId.ToString(), name = val.SubtypeName;
+                string s = val.TypeId.ToString(), name = val.SubtypeId.ToString();
 
                 if (s.EndsWith("Ore")) name += "Ore";
                 else if (s.EndsWith("Ingot")) name += "Ingot";
@@ -1040,7 +1040,7 @@
 
             public override string ToString() => $"{Lnk.ShowName}: {count.ToString("#,##0.##", SYS)}";
             public string ToString(string msk) => string.Format(msk, Lnk.Name, Lnk.ShowName, count, Lnk.Type);
-            public MyInvItem Clone(double Count = double.NaN) => new MyInvItem(Lnk) { count = Count == double.NaN ? this.count : Count };
+            public MyInvItem Clone(double Count = double.NaN) => new MyInvItem(Lnk) { count = double.IsNaN(Count)? this.count : Count};
             public static MyInvItem Parse(string val)
             { MyInvItem res; if (!TryParse(val, out res)) throw new Exception("Error in parse"); return res; }
             public static bool TryParse(string val, out MyInvItem res)
