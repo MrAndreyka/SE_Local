@@ -1,10 +1,10 @@
 ﻿/*----------------------------------------------------------------------  
-    AUTHOR: MrAndrey_ka (Ukraine Cherkassy) e-mail: Andrey.ck.ua@gmail.com  
-    When using and disseminating information about the authorship is obligatory  
-    При использовании и распространении информация об авторстве обязательна  
-    ----------------------------------------------------------------------*/
+        AUTHOR: MrAndrey_ka (Ukraine Cherkassy) e-mail: Andrey.ck.ua@gmail.com  
+        When using and disseminating information about the authorship is obligatory  
+        При использовании и распространении информация об авторстве обязательна  
+        ----------------------------------------------------------------------*/
 
-    void Main(string argument)
+        void Main(string argument)
     {
         var ms = argument.Split('>');
 
@@ -89,7 +89,7 @@
         s.AppendLine("Type " + Inv.GetType());
         List<IMyInventoryItem> L = Inv.GetItems();
         L.ForEach(it => {
-            s.AppendLine(string.Format("Content: ToString: {0} Type: {1} TypeName: {2} DefId: {3}", it.Content, it.Content.TypeId, it.Content.SubtypeName, it.GetDefinitionId()));
+            s.AppendLine(string.Format("Content: ToString: {0} Type: {1} TypeName: {2} DefId: {3}", it.Content, it.Content.TypeId, it.Content.SubtypeId, it.GetDefinitionId()));
             s.AppendLine(string.Format("Content: Int: {0} Type: {1} RawVal: {2} ToString: {3}\n", it.Amount.ToIntSafe(), it.Amount.GetType(), it.Amount.RawValue, it.Amount.ToString()));
         });
     }
