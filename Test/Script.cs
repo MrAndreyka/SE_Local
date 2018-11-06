@@ -374,7 +374,6 @@ When using and disseminating information about the authorship is obligatory
                             T.SetInterval(960, UpdateFrequency.Update10, true);
                             CP = 6;
                             Rul.Dir = PID.DIR.Up | PID.DIR.IgnorTarget;
-
                             AllThrusts.ForEach(x => x.Enabled = false);
                         }
                         break;
