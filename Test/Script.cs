@@ -66,7 +66,8 @@ When using and disseminating information about the authorship is obligatory
     static string ss, mes;
 
     // ---------------------------------- MAIN ---------------------------------------------  
-    void Main(string argument, UpdateType tpu)
+    void 
+        Main(string argument, UpdateType tpu)
     {
         try
         {
@@ -103,8 +104,8 @@ When using and disseminating information about the authorship is obligatory
             {
                 MatrixD MV = new MatrixD();
                 /*0 - Гравитация 
-                  1 - Эфективная тяга
-                  2 - Эфективная тяга учитывая гравитацию
+                  1 - Эфективная тяга (в м/с)
+                  2 - Эфективная тяга (в м/с) учитывая гравитацию
                   3 - Время торможения
                   [0, 3] - Дистанция до цели*/
 
@@ -120,15 +121,14 @@ When using and disseminating information about the authorship is obligatory
                 else stb.AppendFormat(SYS, "{0} Не хватает тяги для остановки {1:#,##0.0}", CurDirect, -pow);
 
                 if (!Rul.IsTarget()) stb.AppendLine();
-                else stb.AppendFormat(SYS, " >{0} {1}\n", (MV[0, 3] = Rul.Distance()).ToString("#,##0.0", SYS), Rul.Radius < 1 ? '*' : '@');
+                else stb.AppendFormat(SYS, " >{0} {1} {2:#,##0.0}c.\n", (MV[0, 3] = Rul.Distance()).ToString("#,##0.0", SYS), Rul.Radius < 1 ? '*' : '@', MV[0, 3] / speed.GetDim(i));
 
                 switch (CP)
                 {
-                    case 3:// Подем Установка тяги атмосферников 
+                    case 3:// Поъдем Установка тяги атмосферников 
                         {
                             var AtmUp = Trusts[TrustsData.ThrustType.Atmospheric, Base6Directions.Direction.Down].GetValues();
 
-                            PowS.GetProcOverride((maxSpeed - speed.Y + gr) * Mass, AtmUp);
                             pow = Trusts[TrustsData.ThrustType.Thrust, Base6Directions.Direction.Backward].GetValues().EffectivePow;
                             if (AtmUp.EffectivePow < pow ||
                                 (AtmUp.EffectivePow < Mass * gr && AtmUp.EffectivePow < pow + Trusts[TrustsData.ThrustType.Hydrogen, Base6Directions.Direction.Backward].GetValues().EffectivePow))// Проверка скорости и эффективности ускорителей  
@@ -143,9 +143,9 @@ When using and disseminating information about the authorship is obligatory
                             }
                             else
                             {
-                                float coof = PowS.GetProcOverride((maxSpeed - speed.Y + gr) * Mass, AtmUp);
+                                float coof = PowS.GetProcOverride((maxSpeed - speed.Z + gr) * Mass, AtmUp);
                                 Trusts[TrustsData.ThrustType.Atmospheric, Base6Directions.Direction.Down].ForEach(x => x.ThrustOverridePercentage = coof);
-                                stb.Append($"Atm: {coof * 100:0.00}%");
+                                stb.Append($"Atm: {coof * 100:0.00}% ({AtmUp.TecCoof})");// {AtmUp.ToString()} + (({maxSpeed} - {speed.Z} + {gr}) * {Mass} ");
                             }
                         }
                         break;
@@ -255,6 +255,7 @@ When using and disseminating information about the authorship is obligatory
                                 Rul.KeyWait = int.MaxValue;
                                 stb.Append(" Меняем курс");
                                 Beep();
+                                break;
                             }
 
                             if (dist < 1 && CP == 11) { SetAtributes("show"); break; }
@@ -268,14 +269,17 @@ When using and disseminating information about the authorship is obligatory
                             pow = PowS.GetDistStop(nextspeed, MV[2, i]);
 
                             var Backward = Trusts.GetSpecThrusts(0, Base6Directions.GetFlippedDirection(CurDirect), x => x.Enabled, null);
-                            stb.AppendFormat(SYS, "Next:{0:#,##0.0##}мс D.St:{2:#,##0.0}м D:{1:0.0}", nextspeed, dist, pow);
+                            stb.AppendFormat(SYS, "Next:{0:#,##0.0##}мс D.St:{1:#,##0.0}м D:{2:0.0}", nextspeed, pow, dist);
 
                             if (dist < pow) // тормозим 
                             {
                                 if (CP != 11)
                                 {
                                     Backward.ForEach(x => x.ThrustOverride = 0);
-                                    Trusts.GetSpecThrusts(0, CurDirect, x => x.Enabled, null).ForEach(x => x.ThrustOverride = 0);
+                                    var tt = Trusts.GetSpecThrusts(0, CurDirect, x => x.Enabled, null);
+                                    tt.ForEach(x => { x.ThrustOverride = 0; x.Enabled = true; });
+                                    stb.Append("  ld = " + tt.Count);
+                                    tt.ForEach(x => stb.Append("~"+x.ThrustOverride));
                                     CP = 11;
                                 }
                                 stb.Append(" Торомозим");
@@ -289,7 +293,7 @@ When using and disseminating information about the authorship is obligatory
                                     Trusts.GetSpecThrusts(0, CurDirect, x => x.Enabled, null).ForEach(x => x.Enabled = false);
                                     CP = 10;
                                 }
-                                else stb.Append(" без тяги " + CurDirect);
+                                else stb.Append(" без тяги");
                             }
                             else
                             {
@@ -432,7 +436,7 @@ When using and disseminating information about the authorship is obligatory
                             if (!kam.EnableRaycast)
                             {
                                 kam.EnableRaycast = true;
-                                ShowAndStop("" + kam.TimeUntilScan(dist) + "ms.   " + kam.RaycastConeLimit);
+                                ShowAndStop("Wait " + (kam.TimeUntilScan(dist) /1000) + "ms.   " + kam.RaycastConeLimit);
                                 return;
                             }
                             if (!kam.CanScan(dist)) { ShowAndStop(kam.TimeUntilScan(dist).ToString() + "ms."); return; }
@@ -960,18 +964,27 @@ When using and disseminating information about the authorship is obligatory
         {
             if (Int == 0) return 0;
             if (!zeroing) return (double)Int / okr;
-            int i;
-            switch (GP.Runtime.UpdateFrequency)
-            {
-                case UpdateFrequency.Update1: i = 16; break;
-                case UpdateFrequency.Update10: i = 160; break;
-                case UpdateFrequency.Update100: i = 1600; break;
-                default: return -1;
-            }
+            var i = GetCicle(GP.Runtime.UpdateFrequency);
+            if (i == 0) return -1;
             var b = Int % i;
             b = b == 0 ? Int : (Int / i + 1) * i;
             return ((double)b / okr);
         }
+
+        protected int GetCicle(UpdateFrequency UF)
+        {
+            int i;
+            switch (UF)
+            {
+                case UpdateFrequency.Update1: i = 16; break;
+                case UpdateFrequency.Update10: i = 160; break;
+                case UpdateFrequency.Update100: i = 1600; break;
+                default: i = 0; break;
+            }
+            return i;
+        }
+
+        public void NexTo(int cicle) { TC = Int - GetCicle(GP.Runtime.UpdateFrequency); }
         public string ToSave() => $"{TC}@{zeroing}@{Int}";
         public static Timer Parse(string sv, MyGridProgram gp)
         {
