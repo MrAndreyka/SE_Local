@@ -19,303 +19,39 @@ using SpaceEngineers.Game.ModAPI.Ingame;
 class Program : MyGridProgram
 {
     /*--------------------------------------------------------------------------       
-AUTHOR: MrAndrey_ka (Ukraine Cherkassy) e-mail: MyAndrey_ka@mail.ru        
-When using and disseminating information about the authorship is obligatory
-При использовании и распространении информация об авторстве обязательна       
-----------------------------------------------------------------------*/
+    AUTHOR: MrAndrey_ka (Ukraine Cherkassy) e-mail: MyAndrey_ka@mail.ru        
+    When using and disseminating information about the authorship is obligatory
+    При использовании и распространении информация об авторстве обязательна       
+    ----------------------------------------------------------------------*/
 
-    static System.Globalization.CultureInfo SYS = System.Globalization.CultureInfo.GetCultureInfoByIetfLanguageTag("RU");
-    Program()
+    Follower Follower1;
+    static ShowMes txt = new ShowMes();
+    Vector3D tecTarg;
+    static bool Flag = false;
+    static float MaxSpeed = 100;
+
+    public Program()
     {
-        try
-        {
-            if (!string.IsNullOrEmpty(Me.CustomData)) Init(Me.CustomData);
-            GridTerminalSystem.GetBlocksOfType<IMyCameraBlock>(Camers,
-                x => x.Enabled && x.Orientation.Forward == RemCon.Orientation.Forward && (x.EnableRaycast = true));
-
-            if (!Storage.StartsWith("AutoUp") || Me.TerminalRunArgument == "null")
-            { T = new Timer(this); return; }
-
-            var tm = Storage.Split('\n');
-            CP = int.Parse(tm[1]);
-            T = Timer.Parse(tm[2], this);
-            Rul.Load(tm[3]);
-        }
-        catch (Exception e) { Echo(e.ToString()); Me.CustomData += "\n" + e.ToString(); }
+        Runtime.UpdateFrequency = UpdateFrequency.Update100;
     }
 
-    void Save() { Storage = string.Format("AutoUp\n{0}\n{1}\n{2}", CP, T.ToSave(), Rul.ToSave()); }
-
-    const int maxSpeed = 100;
-
-    readonly Timer T;
-    static IMyShipController RemCon = null;
-    static IMyTextPanel TP = null;
-    static readonly List<IMyCameraBlock> Camers = new List<IMyCameraBlock>();
-    static IMySoundBlock speker = null;
-
-    static PID Rul = new PID();
-    static VirtualThrusts Trusts = new VirtualThrusts();
-    static DirData AllThrusts = new DirData();
-
-    static int CP = 0;
-    static double Mass = 0, Height;
-    static Vector3D speed = Vector3D.Zero, VGr;
-
-    static bool aded = false;
-    static string ss, mes;
-
-    // ---------------------------------- MAIN ---------------------------------------------  
-    void 
-        Main(string argument, UpdateType tpu)
+    void Main(string arg, UpdateType UT)
     {
-        try
+        if (UT == UpdateType.Update100)
         {
-            if (tpu < UpdateType.Update1 && !string.IsNullOrEmpty(argument)) { Echo_("", false); SetAtributes(argument); return; }
-            if (RemCon == null) { Echo("Необходима инициализация"); return; }
-            var Tic = T.Run();
-            if (Tic == 0 && T.TC % 320 != 0) return;
-            double gr;
-
-            if (Tic > 0)
-            {
-                Mass = RemCon.CalculateShipMass().TotalMass;
-                GetVec_S(RemCon.GetShipVelocities().LinearVelocity, out speed);
-
-                VGr = RemCon.GetNaturalGravity();
-                gr = VGr.Length();
-                if (gr > 0) RemCon.TryGetPlanetElevation(MyPlanetElevation.Surface, out Height);
-            }
-            else gr = VGr.Length();
-
-
-            StringBuilder textout = new StringBuilder("Скор: ");
-            textout.AppendFormat(SYS, "{0} {2:0.###}mc CP:{1}", speed.ToString("0.#"), CP, Tic);
-            //if (gr > 0) textout.AppendFormat(SYS, "\nВыс: {0:0.0}m. Гр: {1:0.00}g.", Height, gr); 
-            textout.AppendFormat(SYS, "_{0} {1}", Rul.KeyWait, Rul.Dir);
-
-            if (Rul.Dir != PID.DIR.None)
-            {
-                var Vdr = Rul.Rules();
-                //textout.AppendFormat("\nYaw: {0:0.00} Pitch: {1:0.00} Roll: {2:0.00}", MathHelper.ToDegrees(Vdr.X), MathHelper.ToDegrees(Vdr.Y), MathHelper.ToDegrees(Vdr.Z)); 
-            }
-
-            if (Tic > 0 && CP != 0)
-            {
-                MatrixD MV = new MatrixD();
-                /*0 - Гравитация 
-                  1 - Эфективная тяга (в м/с)
-                  2 - Эфективная тяга (в м/с) учитывая гравитацию
-                  3 - Время торможения
-                  [0, 3] - Дистанция до цели*/
-
-                var stb = new StringBuilder();
-                if (gr > 0) { Vector3D tmp; GetVec_S(VGr, out tmp); MV.Right = tmp; }
-                PowS.GetPows(speed, ref MV);
-
-                int i = MV.Translation.AbsMaxComponent();
-                Base6Directions.Direction CurDirect = Base6Directions.GetBaseAxisDirection((Base6Directions.Axis)i);
-                if (speed.GetDim(i) < 0) CurDirect = Base6Directions.GetFlippedDirection(CurDirect);
-                double pow = MV[2, i];
-                if (pow > 0) stb.AppendFormat(SYS, "{3} Stop:{2:#,##0.0}м, {1:#,##0.#}с, P:{0:0.##}", pow, MV[3, i], PowS.GetDistStop(speed.GetDim(i), pow), CurDirect);
-                else stb.AppendFormat(SYS, "{0} Не хватает тяги для остановки {1:#,##0.0}", CurDirect, -pow);
-
-                if (!Rul.IsTarget()) stb.AppendLine();
-                else stb.AppendFormat(SYS, " >{0} {1} {2:#,##0.0}c.\n", (MV[0, 3] = Rul.Distance()).ToString("#,##0.0", SYS), Rul.Radius < 1 ? '*' : '@', MV[0, 3] / speed.GetDim(i));
-
-                switch (CP)
-                {
-                    case 3:// Поъдем Установка тяги атмосферников 
-                        {
-                            var AtmUp = Trusts[TrustsData.ThrustType.Atmospheric, Base6Directions.Direction.Down].GetValues();
-
-                            pow = Trusts[TrustsData.ThrustType.Thrust, Base6Directions.Direction.Backward].GetValues().EffectivePow;
-                            if (AtmUp.EffectivePow < pow ||
-                                (AtmUp.EffectivePow < Mass * gr && AtmUp.EffectivePow < pow + Trusts[TrustsData.ThrustType.Hydrogen, Base6Directions.Direction.Backward].GetValues().EffectivePow))// Проверка скорости и эффективности ускорителей  
-                            {
-                                stb.Append("Поворот...");
-                                CP = 0;//вперед и низ атм. - выкл  
-                                Rul.KeyWait = 5;
-                                Rul.Dir = PID.DIR.Forw | PID.DIR.NoGrav;
-                                Trusts[TrustsData.ThrustType.Atmospheric, Base6Directions.Direction.Down].ForEach(x => x.ThrustOverride = 0);
-                                AllThrusts.ForEachToType(TrustsData.ThrustType.Thrust, x => x.Enabled = true);
-                                Trusts[0, Base6Directions.Direction.Forward].ForEach(x => x.Enabled = false);
-                            }
-                            else
-                            {
-                                float coof = PowS.GetProcOverride((maxSpeed - speed.Z + gr) * Mass, AtmUp);
-                                Trusts[TrustsData.ThrustType.Atmospheric, Base6Directions.Direction.Down].ForEach(x => x.ThrustOverridePercentage = coof);
-                                stb.Append($"Atm: {coof * 100:0.00}% ({AtmUp.TecCoof})");// {AtmUp.ToString()} + (({maxSpeed} - {speed.Z} + {gr}) * {Mass} ");
-                            }
-                        }
-                        break;
-                    case 5: // Расчет тяги выход на орбиту  
-                        {
-                            if (Vector3D.IsZero(VGr)) // Уже в космосе    
-                            {
-                                Stoped(true);
-                                stb.Append("Выход из границ гравитации завершен!");
-                                AllThrusts.ForEachToType(TrustsData.ThrustType.Hydrogen, x => { x.ThrustOverride = 0; x.Enabled = false; });
-                                ReloadThrust();
-                                SetAtributes(Rul.IsTarget() ? "avto" : "show");
-                                break;
-                            }
-                            var Trust_Forw = Trusts[TrustsData.ThrustType.Thrust, Base6Directions.Direction.Backward].GetValues();
-                            double tgr = -MV[0, 0];
-                            float coof = PowS.GetProcOverride((maxSpeed - speed.X + tgr) * Mass, Trust_Forw);
-                            Trusts[TrustsData.ThrustType.Thrust, Base6Directions.Direction.Backward].ForEach(x => x.ThrustOverridePercentage = coof);
-                            stb.Append($"Ion: {coof * 100:0.00}%");
-
-                            if (coof <= 1) Trusts[TrustsData.ThrustType.Hydrogen, Base6Directions.Direction.Backward].ForEach(x => x.Enabled = false);// При нехватке тяги включаем или отключает гидротягу  
-                            else
-                            {
-                                coof = PowS.GetProcOverride((maxSpeed - speed.X + tgr) * Mass - Trust_Forw.CurrentPow, Trusts[TrustsData.ThrustType.Hydrogen, Base6Directions.Direction.Backward].GetValues());
-                                Trusts[TrustsData.ThrustType.Hydrogen, Base6Directions.Direction.Backward].ForEach(x => { x.ThrustOverridePercentage = coof; x.Enabled = true; });
-                                stb.Append($" Hydr: {coof * 100:0.00}%");
-
-                                if (coof > 1)
-                                    if (speed.X > 0) stb.Append(" Не хватает тяги");
-                                    else if (Trusts.GetSpecThrusts(0, Base6Directions.Direction.Backward).GetValues().EffectivePow < Math.Abs(Mass * MV.Right.X))
-                                    { SetAtributes("down"); stb.Append("Взлет не возможен, падаем"); }
-                            }
-                        }
-                        break;
-                    case 6: // Свободное падение 
-                    case 7:
-                        {
-                            if (gr == 0) { stb.Append("Ожидание входа в атмосферу"); break; }
-                            var Atm_Up = Trusts[TrustsData.ThrustType.Atmospheric, Base6Directions.Direction.Down].GetValues();
-                            double timestop = Atm_Up.EffectivePow - Mass * gr;  // полезная тяга  
-
-                            if (timestop < Mass / 4)
-                                stb.AppendFormat(SYS, "Тяги не хватает, коэф: {0:#,##0.00} мин. коэф: {1:#,##0.00}",
-                                    Atm_Up.TecCoof, (Atm_Up.TecCoof == 0 ? (Mass * gr) / Atm_Up.Max_pow : (Mass * gr) / Atm_Up.EffectivePow * Atm_Up.TecCoof));
-                            else if (Atm_Up.TecCoof < 0.42)
-                                stb.AppendFormat(SYS, "Коэффициент эффективной тяги: {0:#,##0.00}, жду > 0,42", Atm_Up.TecCoof);
-                            else
-                            {
-                                double MaxHeight = PowS.GetNexSpeed(-speed.Z, MV.Right.Z),//будущая скорость  
-                                dist = (-speed.Z >= maxSpeed ? -speed.Z : (-speed.Z + MV.Right.Z / 2)); //растояние за след.сек.  
-                                //stb.AppendFormat(SYS, "След: {0:#,##0.00}m. Sp:{1:#,##0.0}m. {2}\n", dist, MaxHeight, Mass); 
-                                timestop /= Mass;// скорость торможения 
-                                MaxHeight *= (MaxHeight / timestop) / 2; //крит. высота. 
-
-                                stb.AppendFormat(SYS, "Крит выс: {0:#,##0.00}m. {1:#,##0.0}c. коэф {2:#,##0.00}, {3}",
-                                    MaxHeight, MaxHeight / timestop, Atm_Up.TecCoof, timestop);
-
-                                if (Height < 50) { Stoped(); SetAtributes("show"); break; }// выключаем 
-
-                                timestop = MaxHeight - (Height - dist - 50);
-                                if (timestop < 0)
-                                    if (CP != 7) break;
-                                    else // вкл свободное падение 
-                                    {
-                                        CP--;
-                                        Trusts[TrustsData.ThrustType.Atmospheric, Base6Directions.Direction.Down].ForEach(x => x.Enabled = false);
-                                        break;
-                                    }
-
-                                if (CP == 6) { T.SetInterval(16, UpdateFrequency.Update1, true); CP++; }
-                                if (CP == 7)
-                                {
-                                    if (T.Interval != 960)
-                                        if (Height - MaxHeight < 50) T.SetInterval(960, UpdateFrequency.Update1, true);
-                                        else break;
-                                    var trs = Trusts[TrustsData.ThrustType.Atmospheric, Base6Directions.Direction.Down];
-                                    var coof = PowS.GetProcOverride((-speed.Z) * Mass, trs.GetValues());
-                                    trs.ForEach(x => { x.ThrustOverridePercentage = coof; x.Enabled = true; });
-                                    var prc = trs.GetValues(true);
-                                    stb.AppendFormat(SYS, "Atmospheric: {0:}%", trs[0].ThrustOverridePercentage * 100);
-                                    //stb.AppendFormat(SYS, "\nCurPow: {0:###0.0#} {1}  {2} = {3}", 
-                                    //    prc.CurrentPow / prc.EffectivePow * 100, prc.ToString(), trs[0].ThrustOverridePercentage * 100, coof * 100); 
-                                    break;
-                                }
-                            }
-                        }
-                        break;
-                    case 9:// Управление 
-                    case 10:
-                    case 11:// Контроль     
-                        if (Rul.IsTarget())
-                        {
-                            var dist = MV[0, 3];
-                            if (CP == 9) { CurDirect = Base6Directions.Direction.Forward; i = 0; }
-
-                            pow = PowS.GetDistStop(speed.GetDim(i), MV[2, i]);
-                            if (CP >= 10 && pow > dist && dist > speed.GetDim(i)) // не успеваем тормозить в режиме наблюдения 
-                            {
-                                Trusts.GetSpecThrusts(0, CurDirect, x => x.MaxEffectiveThrust > 0, null).ForEach(x => { x.Enabled = true; x.ThrustOverride = 0; });
-                                var ps = RemCon.GetPosition();
-                                var val = Rul.Target.Center - ps;
-                                var m = MatrixD.CreateFromAxisAngle(RemCon.WorldMatrix.Right, MathHelper.ToRadians(45));
-                                Vector3D.TransformNoProjection(ref val, ref m, out val);
-                                Rul.SetTarget(val += ps);
-                                Note(MyGPS.GPS("NewTarg", val));
-                                SetAtributes("avto");
-                                Rul.KeyWait = int.MaxValue;
-                                stb.Append(" Меняем курс");
-                                Beep();
-                                break;
-                            }
-
-                            if (dist < 1 && CP == 11) { SetAtributes("show"); break; }
-                            pow = MV[0, i];
-                            if (CP == 9) pow += Trusts.GetSpecThrusts(0, Base6Directions.GetFlippedDirection(CurDirect), x => x.Enabled).GetValues().EffectivePow / Mass;
-
-                            if (Rul.IsTarget() && Rul.Radius < 1 && dist < 10000) stb.Append("Rescan: " + Rul.Scan(Rul.Center));
-
-                            double nextspeed = PowS.GetNexSpeed(speed.GetDim(i), pow);
-                            dist -= speed.GetDim(i) / 2 + nextspeed / 2; //дистанция до цели через секунду 
-                            pow = PowS.GetDistStop(nextspeed, MV[2, i]);
-
-                            var Backward = Trusts.GetSpecThrusts(0, Base6Directions.GetFlippedDirection(CurDirect), x => x.Enabled, null);
-                            stb.AppendFormat(SYS, "Next:{0:#,##0.0##}мс D.St:{1:#,##0.0}м D:{2:0.0}", nextspeed, pow, dist);
-
-                            if (dist < pow) // тормозим 
-                            {
-                                if (CP != 11)
-                                {
-                                    Backward.ForEach(x => x.ThrustOverride = 0);
-                                    var tt = Trusts.GetSpecThrusts(0, CurDirect, x => x.Enabled, null);
-                                    tt.ForEach(x => { x.ThrustOverride = 0; x.Enabled = true; });
-                                    stb.Append("  ld = " + tt.Count);
-                                    tt.ForEach(x => stb.Append("~"+x.ThrustOverride));
-                                    CP = 11;
-                                }
-                                stb.Append(" Торомозим");
-                            }
-                            else if (speed.X >= maxSpeed - 0.01 || dist < pow || CP == 11) // доп тяга не нужна  
-                            {
-                                if (CP != 10)
-                                {
-                                    Backward.ForEach(x => x.ThrustOverride = 0);
-                                    stb.Append(" выкл тяги");
-                                    Trusts.GetSpecThrusts(0, CurDirect, x => x.Enabled, null).ForEach(x => x.Enabled = false);
-                                    CP = 10;
-                                }
-                                else stb.Append(" без тяги");
-                            }
-                            else
-                            {
-                                float coof = PowS.GetProcOverride((Math.Min(maxSpeed - speed.X, MV[0, 3]) + MV[0, i]) * Mass, Backward.GetValues());
-                                Backward.ForEach(x => x.ThrustOverridePercentage = coof);
-                                stb.Append($" W:{ coof * 100:0.00}%");
-                            }
-
-                        }
-                        break;
-                    default: break;
-                }
-                ss = stb.ToString();
-            }
-
-            textout.Append("\n" + ss + "\n" + mes);
-            Echo_(textout.ToString(), false);
-            if (aded && Tic > 1 && TP != null) TP.CustomData += "\n\n" + textout.ToString();
+            Follower1 = new Follower(this);
+            txt.Txt = new Selection(null).FindBlock<IMyTextPanel>(GridTerminalSystem);
+            if (txt.Txt != null) txt.Txt.CustomData = "";
+            Runtime.UpdateFrequency = UpdateFrequency.Update10;
         }
-        catch (Exception e) { Echo_(e.ToString()); }
+        else if (Flag && UT == UpdateType.Update10)
+        {
+            txt.SetPoint();
+            if (!Vector3D.IsZero(tecTarg)) Follower1.GoToPos(tecTarg);
+            txt.Show(this);
+        }
+        else if (!string.IsNullOrWhiteSpace(arg)) { SetAtributes(arg); txt.Show(this); }
     }
-    // ---------------------------------- end MAIN ---------------------------------------------        
 
     void SetAtributes(params string[] Args)
     {
@@ -334,515 +70,468 @@ When using and disseminating information about the authorship is obligatory
                     Right = Arg.Substring(pos + 1);
                     Arg = Arg.Remove(pos);
                 }
-                else
-                    Right = "";
+                else Right = "";
                 Arg = Arg.ToLower();
                 switch (Arg)
                 {
-                    case "targ":// Включение     
+                    case "=":
+                        MyGPS.TryParseVers(Right, out tecTarg);
+                        Runtime.UpdateFrequency = UpdateFrequency.Update10;
+                        Flag = true;
+                        break;
+                    case "~=":
+                        MyGPS.TryParseVers(Right, out tecTarg);
+                        Runtime.UpdateFrequency = UpdateFrequency.None;
+                        break;
+                    case "+":
                         {
-                            Vector3D v;
-                            if (!MyGPS.TryParseVers(Right, out v))
-                                ShowAndStop("Не верный формат цели");
-                            Rul.SetTarget(v);
+                            int a;
+                            if (!int.TryParse(Right, out a)) { Echo("Ошибка чтения дистанции"); return; }
+                            tecTarg = Follower.RemCon.GetPosition() + Follower.RemCon.WorldMatrix.Forward * a;
+                            Follower.RemCon.CustomData += $"\n{MyGPS.GPS("NewTarg", tecTarg)}";
+                            Runtime.UpdateFrequency = UpdateFrequency.Update10;
+                            Flag = true;
+                            txt.Add("isOk" + tecTarg);
                         }
                         break;
-                    case "up":// Включение подьема 
-                        {
-                            if (RemCon == null) return; //Не инициализирован  
-                            if (Trusts[TrustsData.ThrustType.Thrust, Base6Directions.Direction.Backward].Count == 0)
-                                if (Trusts[TrustsData.ThrustType.Hydrogen, Base6Directions.Direction.Backward].Count == 0)
-                                { ShowAndStop("Нет ускорителей для выхода в космос"); return; }
-                                else Echo_("Ионные ускорители не обнаружены");
-
-                            if (Vector3D.IsZero(RemCon.GetNaturalGravity()))
-                            { ShowAndStop("Нет гравитации"); return; }
-
-                            if (!string.IsNullOrWhiteSpace(Right))
-                            {
-                                Vector3D v;
-                                if (!MyGPS.TryParseVers(Right, out v)) { ShowAndStop("Не верный формат цели"); return; }
-                                Rul.SetTarget(v);
-                            }
-                            Trusts[TrustsData.ThrustType.Atmospheric, Base6Directions.Direction.Down].ForEach(x => x.Enabled = true);
-                            T.SetInterval(960, UpdateFrequency.Update10, true);
-                            CP = 1;
-                            Rul.Dir = PID.DIR.Up;
-                            Rul.KeyWait = 3;
-                        }
-                        break;
-                    case "down":// Включение спуска  
-                        {
-                            if (RemCon == null) return; //Не инициализирован  
-                            Stoped(true);
-                            T.SetInterval(960, UpdateFrequency.Update10, true);
-                            CP = 6;
-                            Rul.Dir = PID.DIR.Up | PID.DIR.IgnorTarget;
-                            AllThrusts.ForEach(x => x.Enabled = false);
-                        }
-                        break;
-                    case "avto":
-                    case "show":// вывод инфы и автопилот 
-                        {
-                            if (RemCon == null /*|| !Rul.IsTarget()*/) return; //Не инициализирован  
-                            T.SetInterval(960, UpdateFrequency.Update10, true);
-                            Rul.Dir = PID.DIR.Forw;
-                            if (Arg == "avto")
-                            {
-                                Trusts.Clear();
-                                if (Trusts.GetSpecThrusts(0, Base6Directions.Direction.Forward, x => x.MaxEffectiveThrust > 0 && x.Enabled, null).Count == 0)
-                                    ShowAndStop("Нет двигателей для торможения");
-                                else Rul.KeyWait = 9; return;
-                            }
-                            CP = 8; Rul.Dir |= PID.DIR.NoRules;
-                            Rul.ForEach(x => x.GyroOverride = false);
-                        }
-                        break;
-                    case "-":
-                    case "off": // Отключение  
-                        Stoped(true);
-                        break;
-                    case "distin":
-                        {
-                            Vector3D nv;
-                            if (!MyGPS.TryParseVers(Right, out nv)) { ShowAndStop("Не верный формат цели"); return; }
-                            var kam = Camers.Find(x => x.CanScan(nv));
-                            if (kam == null)
-                            {
-                                if (MyMath.AngleBetween(RemCon.WorldMatrix.Forward, nv - RemCon.GetPosition()) < MathHelper.PiOver4)
-                                    ShowAndStop("Нет камеры способной на это. Растояние: " + (RemCon.GetPosition() - nv).Length());
-                                else
-                                {
-                                    Rul.SetTarget(nv, 1);
-                                    SetAtributes("avto"); ss = "Поворот на цель";
-                                    Rul.KeyWait = int.MaxValue; CP = 0;
-                                }
-                                return;
-                            }
-                            var inf = kam.Raycast(nv);
-                            if (inf.IsEmpty()) { Rul.SetTarget(nv, 1); ShowAndStop("Object not found"); return; }
-                            else { Rul.SetTarget(inf.BoundingBox); SetAtributes("avto"); }
-                        }
-                        break;
-                    case "dist":
-                        {
-                            Stoped();
-                            IMyCameraBlock kam = new Selection("*").FindBlock<IMyCameraBlock>(GridTerminalSystem, x => x.IsActive);
-                            if (kam == null) { ShowAndStop($"Не установвлена текущая камера " + Right); return; }
-                            int dist = 20000;
-                            if (!string.IsNullOrWhiteSpace(Right))
-                                if (!int.TryParse(Right, out dist)) { ShowAndStop("Параметр дистанции не верный:" + Right); return; }
-                                else Echo("Max dist: " + dist);
-                            if (!kam.EnableRaycast)
-                            {
-                                kam.EnableRaycast = true;
-                                ShowAndStop("Wait " + (kam.TimeUntilScan(dist) /1000) + "ms.   " + kam.RaycastConeLimit);
-                                return;
-                            }
-                            if (!kam.CanScan(dist)) { ShowAndStop(kam.TimeUntilScan(dist).ToString() + "ms."); return; }
-                            var inf = kam.Raycast(dist);
-                            if (inf.IsEmpty()) { Rul.SetTarget(Vector3D.Zero); ShowAndStop("Target not found"); return; }
-                            Rul.SetTarget(inf.BoundingBox);
-                            Note(MyGPS.GPS(inf.Name + " R-" + Rul.Radius.ToString("0"), inf.Position));
-                            Beep();
-                            var s = $"Найлена цель: {inf.Name} dist: {Rul.Distance().ToString("#,##0.0", SYS)}";
-                            Echo_(s); if (TP != null) Echo(s);
-                        }
-                        break;
-                    case "dist?":
-                        {
-                            Stoped();
-                            IMyCameraBlock kam = new Selection("*").FindBlock<IMyCameraBlock>(GridTerminalSystem, x => x.IsActive);
-                            if (kam == null) { ShowAndStop($"Не установвлена текущая камера " + Right); return; }
-                            int dist = 20000;
-                            if (!string.IsNullOrWhiteSpace(Right))
-                                if (!int.TryParse(Right, out dist)) { ShowAndStop("Параметр дистанции не верный:" + Right); return; }
-                                else Echo("Max dist: " + dist);
-                            if (!kam.EnableRaycast)
-                            {
-                                kam.EnableRaycast = true;
-                                ShowAndStop("" + kam.TimeUntilScan(dist) + "ms.   " + kam.RaycastConeLimit);
-                                return;
-                            }
-                            if (!kam.CanScan(dist)) { ShowAndStop(kam.TimeUntilScan(dist).ToString() + "ms."); return; }
-                            var inf = kam.Raycast(dist);
-                            if (inf.IsEmpty()) { Rul.SetTarget(Vector3D.Zero); ShowAndStop("Target not found"); return; }
-
-                            Rul.SetTarget(inf.BoundingBox);
-                            var s = new StringBuilder(MyGPS.GPS(inf.Name + " R-" + Rul.Radius.ToString("0.0"), inf.Position) + "\n");
-                            s.AppendLine(inf.BoundingBox.ToString());
-                            s.AppendLine(inf.BoundingBox.Size.ToString());
-                            //s.AppendLine($"{Rul.Target.Distance(l.Position)} - {Rul.Radius} / {Rul.Distance()}"); 
-                            Echo_(s.ToString());
-                            if (TP != null) Echo(s.ToString());
-                        }
-                        break;
-                    case "hist": { if (TP != null && (aded = !aded)) TP.CustomData = string.Empty; } break;
+                    case "000": if (txt.Txt != null) txt.Txt.CustomData = string.Empty;  break;
+                    case "off": Follower1.Stop(); break;
                     case "?":
-                        Echo_(">>>>>>>>>>>>");
-
-                        if (Rul.IsTarget()) Echo_(MyGPS.GPS("Target " + Rul.Radius, Rul.Center));
-
-                        /*Echo_("WM " + RemCon.WorldMatrix); 
-                        Echo_("AB " + RemCon.WorldAABB); 
-                        Echo_("ABHr " + RemCon.WorldAABBHr); 
- 
-                        Echo_("Pos " + RemCon.GetPosition()); 
-                        Echo_("Gr " + VGr); 
-                        Echo_("Sp " + RemCon.GetShipVelocities().LinearVelocity);*/
-
-                        ShowAndStop("Инфа выведена");
-                        break;
-                    case "test":
                         {
-                            Rul.ForEach(x => x.GyroOverride = false);
-                            SetAtributes("show"); Rul.Dir = PID.DIR.NoRules | PID.DIR.Up;
+                            txt.AddLine("{0}", Follower1.GetStopPow(tecTarg));
                         }
                         break;
-                    case "init": Init(Right); break;
-                    default:
-                        {
-                            ShowAndStop("Левая команда: " + Arg); break;
-                        }
+                    default: Echo("Левая команда: " + Arg); break;
+
                 }
             }
         }
-        catch (Exception e) { Echo_(e.ToString()); }
+        catch (Exception e) { Echo(e.ToString()); }
     }
 
-    void Stoped(bool clearTrust = false)
+
+    public class Follower
     {
-        T.Stop();
-        CP = -1;
-        Rul.Dir = PID.DIR.None;
+        public static IMyShipController RemCon { get; protected set; }
+        Vector3D acceleration;
+        static Program ParentProgram;
+        MyThrusters myThr;
+        MyGyros myGyros;
+        MySensors mySensors;
+        MyWeapons myWeapons;
 
-        Rul.ForEach(x => x.GyroOverride = false);
-        ReloadThrust(clearTrust);
-    }
-
-    void ReloadThrust(bool clearTrust = false)
-    {
-        bool kosmos = Vector3D.IsZero(RemCon.GetNaturalGravity());
-        if (!kosmos) kosmos = Trusts[TrustsData.ThrustType.Atmospheric, Base6Directions.Direction.Down].GetValues().EffectivePow <=
-                 Trusts[TrustsData.ThrustType.Thrust, Base6Directions.Direction.Down].GetValues().EffectivePow;
-
-        AllThrusts.ForEachToType(TrustsData.ThrustType.Atmospheric, x => { x.ThrustOverride = 0; x.Enabled = !kosmos; });
-        TrustsData tr = new TrustsData(TrustsData.ThrustType.Small);
-        AllThrusts.ForEach(x => x.CopyTrusts(TrustsData.ThrustType.Thrust, tr));
-        if (tr.Count == 0)
+        public Follower(Program parenProg)
         {
-            tr.Clear();
-            AllThrusts.ForEach(x => x.CopyTrusts(TrustsData.ThrustType.Hydrogen, tr));
-            if (tr.Count != 0) tr.ForEach(x => { x.ThrustOverride = 0; x.Enabled = kosmos; });
+            ParentProgram = parenProg;
+            RemCon = new Selection(null).FindBlock<IMyShipController>(ParentProgram.GridTerminalSystem);
+            if (RemCon == null) ParentProgram.Echo("Нет блока упаравления");
+            InitSubSystems();
+            acceleration = myThr.GetMaxSpeed();
         }
-        else tr.ForEach(x => { x.ThrustOverride = 0; x.Enabled = kosmos; });
 
-        if (clearTrust) Trusts.Clear();
-    }
-
-    void Beep()
-    {
-        if (speker == null) speker = new Selection(null).FindBlock<IMySoundBlock>(GridTerminalSystem, x => x.IsSoundSelected);
-        if (speker != null) speker.Play();
-    }
-
-    void ShowAndStop(string text) { if (T.Interval != 0) Stoped(); Echo_(text); }
-
-    void Init(string panel)
-    {
-        TP = new Selection(panel).FindBlock<IMyTextPanel>(GridTerminalSystem);
-        if (TP != null) { TP.ShowPublicTextOnScreen(); TP.WritePublicText(""); }
-        RemCon = new Selection("").FindBlock<IMyShipController>(GridTerminalSystem);
-        if (RemCon == null) { Echo("Блок управления не найден"); return; }
-
-        var TrL = new List<IMyThrust>();
-        new Selection(null).FindBlocks<IMyThrust>(GridTerminalSystem, TrL);
-        if (TrL.Count == 0) { Echo("Не найдены трастеры"); return; }
-
-        AllThrusts.ForEach((x, y) => x.Clear());
-        TrL.ForEach(x =>
+        private void InitSubSystems()
         {
-            if (!x.IsFunctional)
-            { Echo(x.CustomName + " не функционирует"); return; }
-            else
-                AllThrusts[Base6Directions.GetClosestDirection(x.GridThrustDirection)].
-                    Add(x, TrustsData.GetTypeFromSubtypeName(x.BlockDefinition.SubtypeName));
-        });
+            myThr = new MyThrusters();
+            myGyros = new MyGyros(this, 3);
+            mySensors = new MySensors();
+            myWeapons = new MyWeapons();
+        }
 
-        var gl = new List<IMyGyro>();
-        GridTerminalSystem.GetBlocksOfType<IMyGyro>(Rul);
-        Echo("Найдено " + Rul.Count + " гироскопов");
-        Echo("Инициализация завершена");
-    }
-
-    void Echo_(string mask, params object[] vals) => Echo_(string.Format(mask, vals));
-    void Echo_(string text, bool append = true) { if (TP == null) Echo(text); else TP.WritePublicText(text + "\n", append); }
-    void Note(string txt, bool unucal = true)
-    {
-        var str = RemCon.CustomData;
-        if (unucal && str.IndexOf(txt) >= 0) return;
-        RemCon.CustomData += !string.IsNullOrWhiteSpace(str) ? "\n" + txt : txt;
-    }
-
-
-    public static void GetVec_S(Vector3D sp, out Vector3D ouv)
-    {
-        var rd = Vector3D.Reflect(sp, RemCon.WorldMatrix.Down);
-        ouv.X = Vector3D.Reflect(rd, RemCon.WorldMatrix.Left).Dot(RemCon.WorldMatrix.Forward);
-        ouv.Y = Vector3D.Reflect(rd, RemCon.WorldMatrix.Forward).Dot(RemCon.WorldMatrix.Right);
-        ouv.Z = Vector3D.Reflect(Vector3D.Reflect(sp, RemCon.WorldMatrix.Left), RemCon.WorldMatrix.Forward).Dot(RemCon.WorldMatrix.Up);
-    }
-
-    class PowS
-    {
-        public static void GetPows(Vector3D speed, ref MatrixD M)
+        public void TestHover()
         {
-            Base6Directions.Direction i;
-            for (byte j = 0; j < 3; j++)
+            Vector3D GravAccel = RemCon.GetNaturalGravity();
+            //MatrixD MyMatrix = MatrixD.Invert(RemCon.WorldMatrix.GetOrientation());
+            //myThr.SetThrA(Vector3D.Transform(-GravAccel, MyMatrix));
+
+            MatrixD MyMatrix = RemCon.WorldMatrix.GetOrientation();
+            myThr.SetThrust(VectorTransform(-GravAccel * RemCon.CalculateShipMass().TotalMass, MyMatrix));
+        }
+
+
+        public void Killing()
+        {
+            mySensors.UpdateSensors();
+            if (mySensors.DetectedOwner.HasValue)
             {
-                i = Base6Directions.GetBaseAxisDirection((Base6Directions.Axis)j);
-                if (speed.GetDim(j) < 0) { i++; M[0, j] = -M[0, j]; }
-                M[1, j] = Trusts.GetSpecThrusts(0, i, x => x.Enabled, null).GetValues().EffectivePow / Mass;
-                M[2, j] = M[1, j] - M[0, j];
-                M[3, j] = Math.Abs(speed.GetDim(j)) / M[2, j];
+                GoToPos(mySensors.DetectedOwner.Value.Position - RemCon.GetNaturalGravity());
+            }
+            else
+            {
+                //Здесь что-то надо делать, если потерян контакт с хозяином
+            }
+            if (mySensors.DetectedEnemy.HasValue)
+            {
+                Fire(mySensors.DetectedEnemy.Value.Position);
+            }
+            else
+            {
+                //Здесь не обнаружен враг
             }
         }
 
-        public static double GetPowsOne(Base6Directions.Direction Ax, double gr)
-            => Trusts.GetSpecThrusts((byte)Ax, Ax, x => x.Enabled, null).GetValues().EffectivePow / Mass - gr;
+        public void Fire(Vector3D Pos)
+        {
+            MatrixD MyMatrix = RemCon.WorldMatrix.GetOrientation();
+            if (myGyros.LookAtPoint(VectorTransform(mySensors.DetectedEnemy.Value.Position - RemCon.GetPosition(), MyMatrix)) < 0.1)
+            {
+                myWeapons.Fire();
+            }
+        }
+
+        public Vector3D GetStopPowOld(Vector3D ThrVec, Vector3D Gr, bool max = false)
+        {
+            Vector3D res = new Vector3D();
+            //X
+            if (ThrVec.X > 0) res.X = Math.Min(myThr.RightThrusters.EffectivePow, ThrVec.X);
+            else res.X = Math.Max(-myThr.LeftThrusters.EffectivePow, ThrVec.X);
+            //Y
+            if (ThrVec.Y > 0) res.Y = Math.Min(myThr.UpThrusters.EffectivePow, ThrVec.Y);
+            else res.Y = Math.Max(-myThr.DownThrusters.EffectivePow, ThrVec.Y);
+            //Z
+            if (ThrVec.Z > 0) res.Z = Math.Min(myThr.BackwardThrusters.EffectivePow, ThrVec.Z);
+            else res.Z = Math.Max(-myThr.ForwardThrusters.EffectivePow, ThrVec.Z);
+
+            ThrVec -= Gr;
+            if (!max)//Возвращаем симетричный вектор
+            {
+                var c = ThrVec / ThrVec.Sum;
+                c /= c.AbsMax();
+                res *= c;
+            }
+            return res;
+        }
+        public Vector3D GetStopPow(Vector3D ThrVec, bool max = false)
+        {
+            var res = new Vector3D
+            {
+                X = (ThrVec.X > 0 ? myThr.RightThrusters : myThr.LeftThrusters).EffectivePow,
+                Y = (ThrVec.X > 0 ? myThr.UpThrusters : myThr.DownThrusters).EffectivePow,
+                Z = (ThrVec.X > 0 ? myThr.BackwardThrusters : myThr.ForwardThrusters).EffectivePow
+            };
+            if (!max)//Возвращаем симетричный вектор
+            {
+                var c = ThrVec / ThrVec.Sum;
+                c /= c.AbsMax();
+                res *= c;
+            }
+            return res;
+        }
+
+        public void Stop()
+        {
+            myThr.ForEach(x => x.ThrustOverride = 0);
+            Flag = false;
+        }
+
+        public double GoToPos(Vector3D Pos)
+        {
+            var mas = RemCon.CalculateShipMass().TotalMass;
+            var speedTarg = (Pos - RemCon.GetPosition());
+            var dist = speedTarg.Length();
+            if (dist > MaxSpeed) speedTarg = Vector3D.Normalize(speedTarg) * MaxSpeed;
+
+            var MatOrient = RemCon.WorldMatrix.GetOrientation();
+            var GravVec = VectorTransform(-RemCon.GetNaturalGravity(), MatOrient);
+            var speed = RemCon.GetShipVelocities().LinearVelocity;
+
+            //Вектор торможения и доп. силы
+            var stopVector = GetStopPow(VectorTransform(speedTarg, MatOrient)) / mas - GravVec;
+            var PowVector = VectorTransform(speedTarg - speed, MatOrient);
+
+            var coof = Math.Max(speed.Length(), 0.001);
+            coof = (dist / coof - 1) - (coof / stopVector.Length());
+
+            txt.AddLine("D:{0:0.00} C:{1:0.0##}\nStop:{2:0.##} c :{3:0.##} м\nS{4}\nS>{5}\nSt{6}\nNs{7}\nVu{8}",
+                dist, coof, speed.Length() / stopVector.Length(), GetDistStop(speed.Length(), stopVector.Length()), 
+                speed.ToString("0.###"), speedTarg.ToString("0.###"), stopVector.ToString("0.###"), PowVector.ToString("0.###"),
+                PowVector.ToString("0.000"));
+           
+            if (dist <= stopVector.Length()) { txt.Add("Disabled " + dist); Stop(); return 0; }
+
+            if (coof > 0) PowVector = Vector3D.Normalize(speedTarg) * Math.Min(coof * 100, 100) - speed;
+            else PowVector = Vector3D.Normalize(stopVector) * Math.Min(coof * 100, 100);
+
+            PowVector /= 100;
+            txt.AddLine("Rvu" + PowVector.ToString("0.000"));
+
+            myThr.SetProcThrust(PowVector);
+            return dist;
+        }
 
         public static double GetDistStop(double speed, double powStop) => Math.Pow(speed, 2) / powStop / 2;
-        public static float GetProcOverride(double mass, TrustsData.ThrustsValue Thrust)
-        => (float)(mass / Thrust.EffectivePow);
-
-        public static double GetNexSpeed(double tecSpeed, double Pow)
+        public static Vector3D VectorTransform(Vector3D Vec, MatrixD Orientation)
         {
-            var tmp = tecSpeed + Pow;
-            if (tmp > maxSpeed) tmp = Math.Max(tecSpeed, maxSpeed);
-            return tmp;
-        }
-    }
-
-
-    public class TrustsData : List<IMyThrust>
-    {
-        public TrustsData(ThrustType tp) { Type = tp; }
-        public struct ThrustsValue
-        {
-            public double Max_pow, EffectivePow, CurrentPow;
-            public void Add(IMyThrust val) { Max_pow += val.MaxThrust; EffectivePow += val.MaxEffectiveThrust; CurrentPow += val.CurrentThrust; }
-            public void Clear() { Max_pow = 0; EffectivePow = 0; CurrentPow = 0; }
-            public double TecCoof { get { return EffectivePow / Max_pow; } }
-            public new string ToString() => $"M:{Max_pow} E:{EffectivePow}, C:{CurrentPow}";
-        }
-        [Flags] public enum ThrustType : byte { Small = 1, Large, Atmospheric = 4, Hydrogen = 8, Thrust = 16 };
-        public readonly ThrustType Type;
-
-        public virtual ThrustsValue GetValues()
-        {
-            var res = new ThrustsValue();
-            ForEach(x => res.Add(x));
-            return res;
-        }
-        public static ThrustType GetTypeFromSubtypeName(string type)
-        {
-            var rst = type.Substring(10).Split('T', 'H', 'A');
-            ThrustType res = rst[0] == "Large" ? ThrustType.Large : ThrustType.Small;
-            if (rst.Length == 3) res |= (rst[1] == "ydrogen" ? ThrustType.Hydrogen : ThrustType.Atmospheric);
-            else res |= ThrustType.Thrust;
-            return res;
-        }
-    }
-
-    public class TrustsDatas : List<TrustsData>
-    {
-        public static readonly TrustsDatas Empty = new TrustsDatas();
-        public void Add(IMyThrust val, TrustsData.ThrustType Type)
-        {
-            var tmp = Find(x => x.Type == Type);
-            if (tmp == null) Add(new TrustsData(Type) { val });
-            else tmp.Add(val);
-        }
-        public void ForEach(Action<IMyThrust> Act) => ForEach(y => y.ForEach(x => Act(x)));
-        public void ForEachIf(Action<IMyThrust> Act, Func<IMyThrust, bool> TrIf = null, Func<TrustsData, bool> GrIf = null) =>
-            ForEach(y => { if (GrIf == null || GrIf(y)) y.ForEach(x => { if (TrIf == null || TrIf(x)) Act(x); }); });
-        public void CopyTrusts(TrustsData.ThrustType Type, TrustsData res, bool absType = false)
-        { foreach (var x in this) if ((absType ? x.Type : x.Type & Type) == Type) x.ForEach(y => res.Add(y)); }
-
-        public virtual TrustsData.ThrustsValue GetValues()
-        {
-            var res = new TrustsData.ThrustsValue();
-            ForEach(y => y.ForEach(x => res.Add(x)));
-            return res;
-        }
-    }
-
-    public class BufTrustsData : List<IMyThrust>
-    {
-        TrustsData.ThrustsValue TecVal;
-        double LastHeight = -1;
-        public TrustsData.ThrustsValue GetValues(bool reload = false)
-        {
-            if (LastHeight == Height && !reload) return TecVal;
-            TecVal.Clear();
-            ForEach(x => TecVal.Add(x));
-            LastHeight = Height;
-            return TecVal;
-        }
-    }
-    public class VirtualThrusts : Dictionary<int, BufTrustsData>
-    {
-        public BufTrustsData GetSpecThrusts(byte key, Base6Directions.Direction dir, Func<IMyThrust, bool> TrIf = null, Func<TrustsData, bool> GrIf = null)
-        {
-            if (key == 0) key = (byte)dir;
-            key += 200;
-            BufTrustsData res;
-            if (!TryGetValue(key, out res))
-            { res = new BufTrustsData(); AllThrusts[dir].ForEachIf(x => res.Add(x), TrIf, GrIf); Add(key, res); }
-            return res;
-        }
-        BufTrustsData GetThrusts(TrustsData.ThrustType type, Base6Directions.Direction dir)
-        {
-            var key = GetKey(type, dir);
-            BufTrustsData res;
-            if (!TryGetValue(key, out res))
-            { res = new BufTrustsData(); AllThrusts[dir].ForEachIf(x => res.Add(x), null, x => (x.Type & type) == type); Add(key, res); }
-            return res;
-        }
-        public BufTrustsData this[TrustsData.ThrustType type, Base6Directions.Direction dir] { get { return GetThrusts(type, dir); } }
-        public static int GetKey(TrustsData.ThrustType type, Base6Directions.Direction dir) => ((byte)dir + 1) * 20 + (byte)type;
-    }
-
-
-    public class DirData : List<TrustsDatas>
-    {
-        public DirData() : base(6) { for (var i = 0; i < 6; i++) base.Add(new TrustsDatas()); }
-        public void ForEach(Action<IMyThrust> Act) { for (var i = 0; i < 6; i++) this[i].ForEach(x => Act(x)); }
-        internal void ForEach(Action<TrustsDatas, Base6Directions.Direction> Act)
-        { foreach (Base6Directions.Direction i in Enum.GetValues(typeof(Base6Directions.Direction))) Act(base[(int)i], i); }
-        public void ForEachToType(TrustsData.ThrustType Type, Action<IMyThrust> Act, bool absType = false)
-        { for (var i = 0; i < 6; i++) this[i].ForEachIf(x => Act(x), null, x => absType ? x.Type == Type : (x.Type & Type) != 0); }
-        public TrustsDatas this[Base6Directions.Direction i] { get { return base[(int)i]; } }
-    }
-
-    public class PID : List<IMyGyro>
-    {
-        [Flags] public enum DIR { None, NoRules, NoGrav, IgnorTarget = 4, Forw = 8, Back = 16, Up = 32 };
-        public DIR Dir = DIR.None;
-        public BoundingBoxD Target { get; protected set; }
-        public bool IsTarget() => !Vector3D.IsZero(Target.Max);
-        public Vector3D Center { get { return Target.Center; } }
-        public BoundingSphereD SphereD() => BoundingSphereD.CreateFromBoundingBox(Target);
-        public double Radius { get; protected set; }
-
-
-        public int KeyWait = 0;
-        public double Distance() => Target.Distance(RemCon.GetPosition());
-
-        public void SetTarget(BoundingBoxD val) { Target = val; Radius = Target.Size.Length() / 2; }
-        public void SetTarget(Vector3D val, double dist = 0)
-        {
-            if (Vector3D.IsZero(val)) { Target = new BoundingBoxD(val, val); Radius = 0; }
-            else SetTarget(BoundingBoxD.CreateFromSphere(new BoundingSphereD(val, Math.Max(dist, 0.01))));
-        }
-        public byte Scan(Vector3D val)
-        {
-            var kam = Camers.Find(x => x.CanScan(val));
-            if (kam == null) return 0;
-            var inf = kam.Raycast(val);
-            if (!inf.IsEmpty()) { SetTarget(inf.BoundingBox); return 2; }
-            return 1;
+            return new Vector3D(Vec.Dot(Orientation.Right), Vec.Dot(Orientation.Up), Vec.Dot(Orientation.Backward));
         }
 
-
-        public Vector3 Rules()//(DIR Dir = DIR.None) 
+        private class MyWeapons : List<IMySmallGatlingGun>
         {
-            //if (Dir == DIR.None) Dir = this.Dir; 
-            Vector3 Vdr = Vector3D.Zero;
-            var isGr = !Vector3D.IsZero(VGr);
-            var istrg = IsTarget() && (Dir & DIR.IgnorTarget) != DIR.IgnorTarget;
-            if (!isGr && !istrg) return Vdr;
-
-            if ((Dir & DIR.Forw) == DIR.Forw)
+            public MyWeapons()
             {
-                Vector3D vNap = istrg ? Center - RemCon.GetPosition() : -VGr;
-                if (isGr && (Dir & DIR.NoGrav) != DIR.NoGrav) vNap = Vector3D.Reject(vNap, Vector3D.Normalize(VGr));
-
-                Vdr.X = GetAngel(RemCon.WorldMatrix.Down, RemCon.WorldMatrix.Forward, vNap);
-                Vdr.Y = GetAngel(RemCon.WorldMatrix.Right, RemCon.WorldMatrix.Forward, vNap);
-                if (isGr) Vdr.Z = GetAngel(RemCon.WorldMatrix.Forward, RemCon.WorldMatrix.Down, VGr);
-            }
-            else if ((Dir & DIR.Up) == DIR.Up)
-            {
-                Vector3D vNap = istrg ? Center - RemCon.GetPosition() : -VGr;
-
-                Vdr.Z = GetAngel(RemCon.WorldMatrix.Forward, RemCon.WorldMatrix.Down, VGr);
-                Vdr.Y = GetAngel(RemCon.WorldMatrix.Right, RemCon.WorldMatrix.Up, vNap);
+                InitMainBlocks();
             }
 
-            if ((Dir & DIR.NoRules) != DIR.NoRules)
+            private void InitMainBlocks()
             {
-                var abs = Vector3D.Abs(Vdr);
-                if (KeyWait != 0 && abs.X < 0.5 && abs.Y < 0.5 && abs.Z < 0.5)
+                ParentProgram.GridTerminalSystem.GetBlocksOfType<IMySmallGatlingGun>(this);
+            }
+
+            public void Fire()
+            {
+                foreach (IMySmallGatlingGun gun in this)
                 {
-                    if (KeyWait != int.MaxValue) CP = KeyWait;
-                    else if (Scan(Center) > 0) CP = 9;
-                    else CP = 8;
-                    KeyWait = 0;
+                    gun.ApplyAction("ShootOnce");
                 }
-
-                if (abs.X < 0.004f) Vdr.X = 0;
-                if (abs.Y < 0.004f) Vdr.Y = 0;
-                if (abs.Z < 0.004f) Vdr.Z = 0;
-                if (Vdr.X != 0 || Vdr.Y != 0 || Vdr.Z != 0) Drive(Vdr.X, Vdr.Y, Vdr.Z, RemCon.WorldMatrix);
-                else ForEach(x => x.GyroOverride = false);
             }
 
-            return Vdr;
         }
-        public void Drive(double yaw_speed, double pitch_speed, double roll_speed, MatrixD shipMatrix)
+
+        private class MySensors : List<IMySensorBlock>
         {
-            if (Count == 0) return;
-            var relativeRotationVec = Vector3D.TransformNormal(new Vector3D(-pitch_speed, yaw_speed, roll_speed), shipMatrix);
-            foreach (var thisGyro in this)
+            public List<MyDetectedEntityInfo> DetectedEntities;
+            public MyDetectedEntityInfo? DetectedOwner;
+            public MyDetectedEntityInfo? DetectedEnemy;
+            string OwnerName;
+
+            public MySensors()
             {
-                var transformedRotationVec = Vector3D.TransformNormal(relativeRotationVec, Matrix.Transpose(thisGyro.WorldMatrix));
-                thisGyro.GyroOverride = true;
-                // mes = string.Format("{0:0.000} {1:0.000} {2:0.000} {3}", thisGyro.Yaw, thisGyro.Pitch, thisGyro.Roll, transformedRotationVec.ToString("0.000")); 
-                thisGyro.Pitch = (float)transformedRotationVec.X - (transformedRotationVec.X > 0.5 ? thisGyro.Pitch / 3 : 0);
-                thisGyro.Yaw = (float)transformedRotationVec.Y - (transformedRotationVec.Y > 0.5 ? thisGyro.Yaw / 3 : 0);
-                thisGyro.Roll = (float)transformedRotationVec.Z - (transformedRotationVec.Z > 0.5 ? thisGyro.Roll / 3 : 0);
+                InitMainBlocks();
+                OwnerName = ParentProgram.Me.CustomData;
             }
+
+            private void InitMainBlocks()
+            {
+                DetectedEntities = new List<MyDetectedEntityInfo>();
+                ParentProgram.GridTerminalSystem.GetBlocksOfType<IMySensorBlock>(this);
+            }
+
+            public void UpdateSensors()
+            {
+                DetectedOwner = null;
+                DetectedEnemy = null;
+                foreach (IMySensorBlock sensor in this)
+                {
+                    sensor.DetectedEntities(DetectedEntities);
+                    foreach (MyDetectedEntityInfo detEnt in DetectedEntities)
+                    {
+                        ParentProgram.Echo(detEnt.Name);
+                        if (!DetectedOwner.HasValue && detEnt.Name == OwnerName)
+                        {
+                            DetectedOwner = detEnt;
+                        }
+                        else if (!DetectedEnemy.HasValue && detEnt.Relationship == MyRelationsBetweenPlayerAndBlock.Enemies)
+                        {
+                            DetectedEnemy = detEnt;
+                        }
+
+                    }
+                }
+            }
+
         }
 
-        /// <summary>  
-        ///  Расчитывает угол поворота  
-        /// </summary>  
-        /// <param name="Pl">Плоскость</param>  
-        /// <param name="VDirect">Вектор поворота</param>  
-        /// <param name="Targ">Вектор цели</param>  
-        public static float GetAngel(Vector3D Pl, Vector3D VDirect, Vector3D Targ)
+        private class MyGyros : List<IMyGyro>
         {
-            var tm = Vector3D.Reject(Targ, Pl);
-            var u = Math.Acos(VDirect.Dot(tm) / (VDirect.Length() * tm.Length()));
-            return (float)(MyMath.AngleBetween(tm, Pl.Cross(VDirect)) > MathHelper.PiOver2 ? -u : u);
+            float gyroMult;
+            Follower myBot;
+
+            public MyGyros(Follower mbt, float mult)
+            {
+                myBot = mbt;
+                gyroMult = mult;
+                InitMainBlocks();
+            }
+
+            private void InitMainBlocks()
+            {
+                ParentProgram.GridTerminalSystem.GetBlocksOfType<IMyGyro>(this);
+            }
+
+            public float LookAtPoint(Vector3D LookPoint)
+            {
+                Vector3D SignalVector = Vector3D.Normalize(LookPoint);
+                foreach (IMyGyro gyro in this)
+                {
+                    gyro.Pitch = -(float)SignalVector.Y * gyroMult;
+                    gyro.Yaw = (float)SignalVector.X * gyroMult;
+                }
+                return (Math.Abs((float)SignalVector.Y) + Math.Abs((float)SignalVector.X));
+            }
+
         }
 
-        public string ToSave() => string.Format("{0},{1},{2}", KeyWait, Dir, string.Join(";", Target.GetCorners()));
-        public void Load(string val)
+        private class MyThrusters : List<IMyThrust>
         {
-            var vl = val.Split(',');
-            KeyWait = int.Parse(vl[0]);
-            Rul.Dir = (PID.DIR)Enum.Parse(typeof(PID.DIR), vl[1]);
-            vl = vl[2].Split(';');
-            var lst = new List<Vector3D>(vl.Length);
-            for (var i = 0; i < vl.Length; i++)
-            { Vector3D tm; Vector3D.TryParse(vl[i], out tm); lst.Add(tm); }
-            SetTarget(BoundingBoxD.CreateFromPoints(lst));
+            public class GroupThrusts : List<IMyThrust>
+            {
+                public double EffectivePow { get; protected set; }
+                new public void Add(IMyThrust val) { base.Add(val); EffectivePow += val.MaxEffectiveThrust; }
+                new public void Clear() { EffectivePow = 0; base.Clear(); }
+                public void Recalc() { EffectivePow = 0; ForEach(x => EffectivePow += x.MaxEffectiveThrust); }
+            }
+
+            //Follower myBot;
+            public GroupThrusts UpThrusters;
+            public GroupThrusts DownThrusters;
+            public GroupThrusts LeftThrusters;
+            public GroupThrusts RightThrusters;
+            public GroupThrusts ForwardThrusters;
+            public GroupThrusts BackwardThrusters;
+
+            public struct ThrustsValue
+            {
+                public double Max_pow, EffectivePow, CurrentPow;
+                public void Add(IMyThrust val) { Max_pow += val.MaxThrust; EffectivePow += val.MaxEffectiveThrust; CurrentPow += val.CurrentThrust; }
+                public void Clear() { Max_pow = 0; EffectivePow = 0; CurrentPow = 0; }
+                public double TecCoof { get { return EffectivePow / Max_pow; } }
+                public new string ToString() => $"M:{Max_pow} E:{EffectivePow}, C:{CurrentPow}";
+            }
+
+            public Vector3D GetMaxSpeed()
+            {
+                var m = RemCon.CalculateShipMass().TotalMass;
+                return new Vector3D(
+                    Math.Min(RightThrusters.EffectivePow, LeftThrusters.EffectivePow / m),
+                    Math.Min(UpThrusters.EffectivePow, DownThrusters.EffectivePow / m),
+                    Math.Min(ForwardThrusters.EffectivePow, BackwardThrusters.EffectivePow / m));
+            }
+
+
+            //переменные подсистемы двигателей
+            public MyThrusters()
+            {
+                InitMainBlocks();
+            }
+
+            private void InitMainBlocks()
+            {
+                UpThrusters = new GroupThrusts();
+                DownThrusters = new GroupThrusts();
+                LeftThrusters = new GroupThrusts();
+                RightThrusters = new GroupThrusts();
+                ForwardThrusters = new GroupThrusts();
+                BackwardThrusters = new GroupThrusts();
+
+                ReloadTrusters();
+            }
+
+            public void ReloadTrusters()
+            {
+                UpThrusters.Clear();
+                DownThrusters.Clear();
+                LeftThrusters.Clear();
+                RightThrusters.Clear();
+                ForwardThrusters.Clear();
+                BackwardThrusters.Clear();
+
+                Matrix ThrLocM = new Matrix();
+                Matrix MainLocM = new Matrix();
+                RemCon.Orientation.GetMatrix(out MainLocM);
+
+                ParentProgram.GridTerminalSystem.GetBlocksOfType<IMyThrust>(this, x => x.IsWorking);
+
+                for (int i = 0; i < Count; i++)
+                {
+                    IMyThrust Thrust = this[i];
+                    Thrust.Orientation.GetMatrix(out ThrLocM);
+                    //Y
+                    if (ThrLocM.Backward == MainLocM.Up)
+                        UpThrusters.Add(Thrust);
+                    else if (ThrLocM.Backward == MainLocM.Down)
+                        DownThrusters.Add(Thrust);
+                    //X
+                    else if (ThrLocM.Backward == MainLocM.Left)
+                        LeftThrusters.Add(Thrust);
+                    else if (ThrLocM.Backward == MainLocM.Right)
+                        RightThrusters.Add(Thrust);
+                    //Z
+                    else if (ThrLocM.Backward == MainLocM.Forward)
+                        ForwardThrusters.Add(Thrust);
+                    else if (ThrLocM.Backward == MainLocM.Backward)
+                        BackwardThrusters.Add(Thrust);
+                }
+            }
+
+            //private void SetGroupThrust(List<IMyThrust> ThrList, float Thr)
+            //{
+            //    for (int i = 0; i < ThrList.Count; i++)
+            //        ThrList[i].ThrustOverridePercentage = Thr;
+            //}
+
+
+            public void SetThrust(Vector3D ThrVec)
+            {
+                this.ForEach(x => x.ThrustOverride = 0f);
+                var mas = RemCon.CalculateShipMass().TotalMass;
+
+                ThrVec.X = ThrVec.X / (ThrVec.X > 0 ? RightThrusters : LeftThrusters).EffectivePow;
+                ThrVec.X = ThrVec.X / (ThrVec.X > 0 ? UpThrusters : DownThrusters).EffectivePow;
+                ThrVec.X = ThrVec.X / (ThrVec.X > 0 ? BackwardThrusters : ForwardThrusters).EffectivePow;
+
+                SetProcThrust(ThrVec);
+            }
+
+            public void SetProcThrust(Vector3 ThrVec)
+            {
+                ForEach(x=>x.ThrustOverride = 0f);
+                //X
+                if (ThrVec.X > 0) RightThrusters.ForEach(x => x.ThrustOverridePercentage = ThrVec.X);
+                else LeftThrusters.ForEach(x => x.ThrustOverridePercentage = -ThrVec.X);
+
+                //Y
+                if (ThrVec.Y > 0) UpThrusters.ForEach(x => x.ThrustOverridePercentage = ThrVec.Y);
+                else DownThrusters.ForEach(x => x.ThrustOverridePercentage = -ThrVec.Y);
+
+                //Z
+                if (ThrVec.Z > 0) BackwardThrusters.ForEach(x => x.ThrustOverridePercentage = ThrVec.Z);
+                else ForwardThrusters.ForEach(x => x.ThrustOverridePercentage = -ThrVec.Z);
+
+                ThrVec *= 100;
+
+                if (ThrVec.X > 0) txt.Add(string.Format("R:{0:0.00} % ", ThrVec.X)); else txt.Add(string.Format("L:{0:0.00} % ", -ThrVec.X));
+                if (ThrVec.Y > 0) txt.Add(string.Format("U:{0:0.00} % ", ThrVec.Y)); else txt.Add(string.Format("D:{0:0.00} % ", -ThrVec.Y));
+                if (ThrVec.Z > 0) txt.Add(string.Format("B:{0:0.00} %", ThrVec.Z)); else txt.Add(string.Format("F:{0:0.00} %", -ThrVec.Z));
+            }
+
+
         }
 
     }
+    public class ShowMes
+    {
+        List<String> buf = new List<string>();
+        public IMyTextPanel Txt = null;
+        int curPoint = 0;
+        public bool ToConsole, Added = false;
 
+        public void SetPoint() { curPoint = buf.Count; }
+        public void Clear(bool all = false)
+        {
+            if (all) buf.Clear(); else buf.RemoveRange(0, curPoint);
+            ToConsole = false;
+            Added = false;
+        }
+        public void Show(MyGridProgram GS)
+        {
+            if (!Added) Clear();
+            var text = string.Join("", buf);
+            if (ToConsole || (Txt == null)) GS.Echo(text);
+            if (Txt != null) { Txt.WritePublicText(text); Txt.CustomData += "\n\n" + text; }
+        }
+        public void Show(MyGridProgram GS, bool ToConsole, bool Added)
+        {
+            this.Added = Added;
+            this.ToConsole = ToConsole;
+            Show(GS);
+        }
+
+        public ShowMes Add(string text) { buf.Add(text); return this; }
+        public ShowMes AddLine(string text) => Add(text + "\n");
+        public ShowMes AddLine(string format, params object[] args) => Add(string.Format(format, args)+ "\n");
+        public ShowMes AddFromLine(string text) => Add("\n" + text);
+        public ShowMes AddFromLine(string format, params object[] args) => Add("\n" + string.Format(format, args));
+
+    }
 
     public class Selection
     {
@@ -874,7 +563,8 @@ When using and disseminating information about the authorship is obligatory
         public bool Complies(IMyTerminalBlock val)
         {
             if (GR != null && val.CubeGrid != GR) return false;
-            return Complies(val.CustomName);
+            if (!Complies(val.CustomName)) return false;
+            return true;
         }
         public bool Complies(string str)
         {
@@ -892,7 +582,7 @@ When using and disseminating information about the authorship is obligatory
         public Type FindBlock<Type>(IMyGridTerminalSystem TB, Func<Type, bool> Fp = null) where Type : class
         {
             List<Type> res = new List<Type>(); bool fs = false;
-            TB.GetBlocksOfType<Type>(res, x => fs ? false : fs = (Complies(x as IMyTerminalBlock) && (Fp == null || Fp(x))));
+            TB.GetBlocksOfType<Type>(res, x => fs ? false : fs = (Complies((x as IMyTerminalBlock)) && (Fp == null || Fp(x))));
             return res.Count == 0 ? null : res[0];
         }
         public void FindBlocks(IMyGridTerminalSystem TB, List<IMyTerminalBlock> res, Func<IMyTerminalBlock, bool> Fp = null)
@@ -901,96 +591,6 @@ When using and disseminating information about the authorship is obligatory
         }
         public void FindBlocks<Type>(IMyGridTerminalSystem TB, List<Type> res, Func<Type, bool> Fp = null) where Type : class
         { TB.GetBlocksOfType<Type>(res, x => Complies((x as IMyTerminalBlock)) && (Fp == null || Fp(x))); }
-    }
-    class Timer
-    {
-        readonly MyGridProgram GP;
-        int Int;
-        public bool zeroing;
-        public int TC { get; protected set; }
-        public Timer(MyGridProgram Owner, int Inter = 0, int tc = 0, bool zer = false)
-        {
-            GP = Owner;
-            if (Inter == 0) zeroing = zer;
-            else
-            {
-                var P = new Point(Inter, 0);
-                CallFrequency(ref P);
-                SetInterval(P, zer);
-            }
-            TC = tc;
-        }
-        public int Interval
-        {
-            get { return Int; }
-            set { SetInterval(RoundInt(value), zeroing); }
-        }
-        public void Stop() { GP.Runtime.UpdateFrequency = UpdateFrequency.None; Int = 0; }
-        public static Point RoundInt(int value)
-        {
-            if (value == 0) return new Point(0, 0);
-            Point v = new Point(value, 0);
-            var del = CallFrequency(ref v);
-            v.X = value % del;
-            if (v.X > del / 2) value += del;
-            v.X = value - v.X;
-            return v;
-        }
-        public static int CallFrequency(ref Point res)
-        {
-            int del;
-            if (res.X <= 960) { del = 16; res.Y = 1; }
-            else if (res.X < 4000) { del = 160; res.Y = 2; }
-            else { del = 1600; res.Y = 4; }
-            return del;
-        }
-        public void SetInterval(int value, UpdateFrequency updateFreq, bool zeroing)
-        { this.zeroing = zeroing; Int = value; GP.Runtime.UpdateFrequency = updateFreq; TC = 0; }
-        public void SetInterval(Point val, bool zeroing)
-        { this.zeroing = zeroing; Int = val.X; GP.Runtime.UpdateFrequency = (UpdateFrequency)val.Y; TC = 0; }
-        public void SetInterval(int value, bool zeroing) { this.zeroing = zeroing; Interval = value; }
-        public int Run()
-        {
-            if (Int == 0) return 1;
-            TC += (int)GP.Runtime.TimeSinceLastRun.TotalMilliseconds;
-            if (TC < Int) return 0;
-            int res = TC;
-            TC = zeroing ? 0 : TC % Int;
-            return res;
-        }
-        public override string ToString() { return Int == 0 ? "отключено" : (Int + "мс:" + GP.Runtime.UpdateFrequency); }
-        public string ToString(int okr) => Int == 0 ? "отключено" : GetInterval().ToString("##0.##");
-        public double GetInterval(int okr = 1000)
-        {
-            if (Int == 0) return 0;
-            if (!zeroing) return (double)Int / okr;
-            var i = GetCicle(GP.Runtime.UpdateFrequency);
-            if (i == 0) return -1;
-            var b = Int % i;
-            b = b == 0 ? Int : (Int / i + 1) * i;
-            return ((double)b / okr);
-        }
-
-        protected int GetCicle(UpdateFrequency UF)
-        {
-            int i;
-            switch (UF)
-            {
-                case UpdateFrequency.Update1: i = 16; break;
-                case UpdateFrequency.Update10: i = 160; break;
-                case UpdateFrequency.Update100: i = 1600; break;
-                default: i = 0; break;
-            }
-            return i;
-        }
-
-        public void NexTo(int cicle) { TC = Int - GetCicle(GP.Runtime.UpdateFrequency); }
-        public string ToSave() => $"{TC}@{zeroing}@{Int}";
-        public static Timer Parse(string sv, MyGridProgram gp)
-        {
-            var s = sv.Split('@');
-            return new Timer(gp, int.Parse(s[2]), int.Parse(s[0]), bool.Parse(s[1]));
-        }
     }
 
     public static class MyGPS
