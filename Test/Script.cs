@@ -96,6 +96,13 @@ class Program : MyGridProgram
                         break;
                     case "000": if (txt.Txt != null) txt.Txt.CustomData = string.Empty;  break;
                     case "off": Follower1.Stop(); break;
+                    case ">":
+                        {
+                            float f = 0;
+                            Follower1.myThr.ForwardThrusters.ForEach(x => f += x.ThrustOverridePercentage = 40);
+                            Echo($"{f}");
+                        }
+                            break;
                     case "?":
                         {
                             txt.AddLine("{0}", Follower1.GetStopPow(tecTarg));
@@ -115,7 +122,7 @@ class Program : MyGridProgram
         public static IMyShipController RemCon { get; protected set; }
         Vector3D acceleration;
         static Program ParentProgram;
-        MyThrusters myThr;
+        public MyThrusters myThr;
         MyGyros myGyros;
         MySensors mySensors;
         MyWeapons myWeapons;
@@ -204,9 +211,9 @@ class Program : MyGridProgram
         {
             var res = new Vector3D
             {
-                X = (ThrVec.X > 0 ? myThr.RightThrusters : myThr.LeftThrusters).EffectivePow,
-                Y = (ThrVec.X > 0 ? myThr.UpThrusters : myThr.DownThrusters).EffectivePow,
-                Z = (ThrVec.X > 0 ? myThr.BackwardThrusters : myThr.ForwardThrusters).EffectivePow
+                X = (ThrVec.X < 0 ? myThr.RightThrusters : myThr.LeftThrusters).EffectivePow,
+                Y = (ThrVec.Y < 0 ? myThr.UpThrusters : myThr.DownThrusters).EffectivePow,
+                Z = (ThrVec.Z < 0 ? myThr.BackwardThrusters : myThr.ForwardThrusters).EffectivePow
             };
             if (!max)//Возвращаем симетричный вектор
             {
@@ -239,16 +246,19 @@ class Program : MyGridProgram
             var PowVector = VectorTransform(speedTarg - speed, MatOrient);
 
             var coof = Math.Max(speed.Length(), 0.001);
-            coof = (dist / coof - 1) - (coof / stopVector.Length());
+            //coof = (dist / coof - 1) - (coof / stopVector.Length());
 
-            txt.AddLine("D:{0:0.00} C:{1:0.0##}\nStop:{2:0.##} c :{3:0.##} м\nS{4}\nS>{5}\nSt{6}\nNs{7}\nVu{8}",
+            //coof = (1 - coof / speedTarg.Length()) - (GetDistStop(speed.Length(), stopVector.Length()) / dist)
+             coof = GetDistStop(speed.Length(), stopVector.Length()) / dist;
+
+            txt.AddLine("D:{0:0.00} C:{1:0.0##}\nStop:{2:0.##} c :{3:0.##} м\nS{4}\nS>{5}\nSt{6}\nNs{7}\nNs_{8}",
                 dist, coof, speed.Length() / stopVector.Length(), GetDistStop(speed.Length(), stopVector.Length()), 
                 speed.ToString("0.###"), speedTarg.ToString("0.###"), stopVector.ToString("0.###"), PowVector.ToString("0.###"),
-                PowVector.ToString("0.000"));
+                (speedTarg - speed).ToString("0.###"));
            
             if (dist <= stopVector.Length()) { txt.Add("Disabled " + dist); Stop(); return 0; }
 
-            if (coof > 0) PowVector = Vector3D.Normalize(speedTarg) * Math.Min(coof * 100, 100) - speed;
+            if (coof < 0.75) PowVector = Vector3D.Normalize(PowVector) * Math.Min((1 - coof) * 100, 100);
             else PowVector = Vector3D.Normalize(stopVector) * Math.Min(coof * 100, 100);
 
             PowVector /= 100;
@@ -360,7 +370,7 @@ class Program : MyGridProgram
 
         }
 
-        private class MyThrusters : List<IMyThrust>
+        public/*private*/ class MyThrusters : List<IMyThrust>
         {
             public class GroupThrusts : List<IMyThrust>
             {
@@ -389,11 +399,11 @@ class Program : MyGridProgram
 
             public Vector3D GetMaxSpeed()
             {
-                var m = RemCon.CalculateShipMass().TotalMass;
                 return new Vector3D(
-                    Math.Min(RightThrusters.EffectivePow, LeftThrusters.EffectivePow / m),
-                    Math.Min(UpThrusters.EffectivePow, DownThrusters.EffectivePow / m),
-                    Math.Min(ForwardThrusters.EffectivePow, BackwardThrusters.EffectivePow / m));
+                    Math.Min(RightThrusters.EffectivePow, LeftThrusters.EffectivePow),
+                    Math.Min(UpThrusters.EffectivePow, DownThrusters.EffectivePow),
+                    Math.Min(ForwardThrusters.EffectivePow, BackwardThrusters.EffectivePow))
+                    /RemCon.CalculateShipMass().TotalMass;
             }
 
 
@@ -426,6 +436,7 @@ class Program : MyGridProgram
 
                 Matrix ThrLocM = new Matrix();
                 Matrix MainLocM = new Matrix();
+                Vector3 Bacw;
                 RemCon.Orientation.GetMatrix(out MainLocM);
 
                 ParentProgram.GridTerminalSystem.GetBlocksOfType<IMyThrust>(this, x => x.IsWorking);
@@ -434,21 +445,17 @@ class Program : MyGridProgram
                 {
                     IMyThrust Thrust = this[i];
                     Thrust.Orientation.GetMatrix(out ThrLocM);
+                    Bacw = ThrLocM.Backward;
+
                     //Y
-                    if (ThrLocM.Backward == MainLocM.Up)
-                        UpThrusters.Add(Thrust);
-                    else if (ThrLocM.Backward == MainLocM.Down)
-                        DownThrusters.Add(Thrust);
+                    if (Bacw == MainLocM.Up) UpThrusters.Add(Thrust);
+                    else if (Bacw == MainLocM.Down) DownThrusters.Add(Thrust);
                     //X
-                    else if (ThrLocM.Backward == MainLocM.Left)
-                        LeftThrusters.Add(Thrust);
-                    else if (ThrLocM.Backward == MainLocM.Right)
-                        RightThrusters.Add(Thrust);
+                    else if (Bacw == MainLocM.Left) LeftThrusters.Add(Thrust);
+                    else if (Bacw == MainLocM.Right) RightThrusters.Add(Thrust);
                     //Z
-                    else if (ThrLocM.Backward == MainLocM.Forward)
-                        ForwardThrusters.Add(Thrust);
-                    else if (ThrLocM.Backward == MainLocM.Backward)
-                        BackwardThrusters.Add(Thrust);
+                    else if (Bacw == MainLocM.Forward) ForwardThrusters.Add(Thrust);
+                    else if (Bacw == MainLocM.Backward) BackwardThrusters.Add(Thrust);
                 }
             }
 
@@ -465,8 +472,8 @@ class Program : MyGridProgram
                 var mas = RemCon.CalculateShipMass().TotalMass;
 
                 ThrVec.X = ThrVec.X / (ThrVec.X > 0 ? RightThrusters : LeftThrusters).EffectivePow;
-                ThrVec.X = ThrVec.X / (ThrVec.X > 0 ? UpThrusters : DownThrusters).EffectivePow;
-                ThrVec.X = ThrVec.X / (ThrVec.X > 0 ? BackwardThrusters : ForwardThrusters).EffectivePow;
+                ThrVec.Y = ThrVec.Y / (ThrVec.Y > 0 ? UpThrusters : DownThrusters).EffectivePow;
+                ThrVec.Z = ThrVec.Z / (ThrVec.Z > 0 ? BackwardThrusters : ForwardThrusters).EffectivePow;
 
                 SetProcThrust(ThrVec);
             }
