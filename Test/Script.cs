@@ -27,24 +27,20 @@ class Program : MyGridProgram
     Follower Follower1;
     static ShowMes txt = new ShowMes();
     Vector3D tecTarg;
-    static bool Flag = false;
+    static byte Flag = 0;
     static float MaxSpeed = 100;
 
     public Program()
     {
-        Runtime.UpdateFrequency = UpdateFrequency.Update100;
+        Follower1 = new Follower(this);
+        txt.Txt = new Selection(null).FindBlock<IMyTextPanel>(GridTerminalSystem);
+        //if (txt.Txt != null) txt.Txt.CustomData = "";
+        Runtime.UpdateFrequency = UpdateFrequency.Update10;
     }
 
     void Main(string arg, UpdateType UT)
     {
-        if (UT == UpdateType.Update100)
-        {
-            Follower1 = new Follower(this);
-            txt.Txt = new Selection(null).FindBlock<IMyTextPanel>(GridTerminalSystem);
-            if (txt.Txt != null) txt.Txt.CustomData = "";
-            Runtime.UpdateFrequency = UpdateFrequency.Update10;
-        }
-        else if (Flag && UT == UpdateType.Update10)
+        if (Flag>0 && UT == UpdateType.Update10)
         {
             txt.SetPoint();
             if (!Vector3D.IsZero(tecTarg)) Follower1.GoToPos(tecTarg);
@@ -74,38 +70,22 @@ class Program : MyGridProgram
                 Arg = Arg.ToLower();
                 switch (Arg)
                 {
-                    case "=":
-                        MyGPS.TryParseVers(Right, out tecTarg);
-                        Runtime.UpdateFrequency = UpdateFrequency.Update10;
-                        Flag = true;
-                        break;
-                    case "~=":
-                        MyGPS.TryParseVers(Right, out tecTarg);
-                        Runtime.UpdateFrequency = UpdateFrequency.None;
-                        break;
+                    case "=": MyGPS.TryParseVers(Right, out tecTarg); break;
                     case "+":
                         {
                             int a;
                             if (!int.TryParse(Right, out a)) { Echo("Ошибка чтения дистанции"); return; }
                             tecTarg = Follower.RemCon.GetPosition() + Follower.RemCon.WorldMatrix.Forward * a;
                             Follower.RemCon.CustomData += $"\n{MyGPS.GPS("NewTarg", tecTarg)}";
-                            Runtime.UpdateFrequency = UpdateFrequency.Update10;
-                            Flag = true;
                             txt.Add("isOk" + tecTarg);
                         }
                         break;
                     case "000": if (txt.Txt != null) txt.Txt.CustomData = string.Empty;  break;
+                    case "go": Flag = 10; break;
                     case "off": Follower1.Stop(); break;
-                    case ">":
-                        {
-                            float f = 0;
-                            Follower1.myThr.ForwardThrusters.ForEach(x => f += x.ThrustOverridePercentage = 40);
-                            Echo($"{f}");
-                        }
-                            break;
                     case "?":
                         {
-                            txt.AddLine("{0}", Follower1.GetStopPow(tecTarg));
+                            txt.AddLine("{0}", -Follower1.GetPow(Follower.RemCon.GetPosition()-tecTarg));
                         }
                         break;
                     default: Echo("Левая команда: " + Arg); break;
@@ -185,39 +165,17 @@ class Program : MyGridProgram
             }
         }
 
-        public Vector3D GetStopPowOld(Vector3D ThrVec, Vector3D Gr, bool max = false)
-        {
-            Vector3D res = new Vector3D();
-            //X
-            if (ThrVec.X > 0) res.X = Math.Min(myThr.RightThrusters.EffectivePow, ThrVec.X);
-            else res.X = Math.Max(-myThr.LeftThrusters.EffectivePow, ThrVec.X);
-            //Y
-            if (ThrVec.Y > 0) res.Y = Math.Min(myThr.UpThrusters.EffectivePow, ThrVec.Y);
-            else res.Y = Math.Max(-myThr.DownThrusters.EffectivePow, ThrVec.Y);
-            //Z
-            if (ThrVec.Z > 0) res.Z = Math.Min(myThr.BackwardThrusters.EffectivePow, ThrVec.Z);
-            else res.Z = Math.Max(-myThr.ForwardThrusters.EffectivePow, ThrVec.Z);
-
-            ThrVec -= Gr;
-            if (!max)//Возвращаем симетричный вектор
-            {
-                var c = ThrVec / ThrVec.Sum;
-                c /= c.AbsMax();
-                res *= c;
-            }
-            return res;
-        }
-        public Vector3D GetStopPow(Vector3D ThrVec, bool max = false)
+        public Vector3D GetPow(Vector3D ThrVec, bool max = false)
         {
             var res = new Vector3D
             {
-                X = (ThrVec.X < 0 ? myThr.RightThrusters : myThr.LeftThrusters).EffectivePow,
-                Y = (ThrVec.Y < 0 ? myThr.UpThrusters : myThr.DownThrusters).EffectivePow,
-                Z = (ThrVec.Z < 0 ? myThr.BackwardThrusters : myThr.ForwardThrusters).EffectivePow
+                X = ThrVec.X > 0 ? myThr.RightThrusters.EffectivePow : -myThr.LeftThrusters.EffectivePow,
+                Y = ThrVec.Y > 0 ? myThr.UpThrusters.EffectivePow : -myThr.DownThrusters.EffectivePow,
+                Z = ThrVec.Z > 0 ? myThr.BackwardThrusters.EffectivePow : -myThr.ForwardThrusters.EffectivePow
             };
-            if (!max)//Возвращаем симетричный вектор
+            if (!max)
             {
-                var c = ThrVec / ThrVec.Sum;
+                var c = ThrVec / Vector3D.Abs(ThrVec).Sum;
                 c /= c.AbsMax();
                 res *= c;
             }
@@ -227,44 +185,113 @@ class Program : MyGridProgram
         public void Stop()
         {
             myThr.ForEach(x => x.ThrustOverride = 0);
-            Flag = false;
+            Flag = 1;
         }
 
         public double GoToPos(Vector3D Pos)
         {
             var mas = RemCon.CalculateShipMass().TotalMass;
-            var speedTarg = (Pos - RemCon.GetPosition());
-            var dist = speedTarg.Length();
+            Vector3D speedTarg = (Pos - RemCon.GetPosition()),
+            speedV = RemCon.GetShipVelocities().LinearVelocity; //тек. скор
+
+            double dist = speedTarg.Length(), speed = speedV.Length();
             if (dist > MaxSpeed) speedTarg = Vector3D.Normalize(speedTarg) * MaxSpeed;
 
             var MatOrient = RemCon.WorldMatrix.GetOrientation();
-            var GravVec = VectorTransform(-RemCon.GetNaturalGravity(), MatOrient);
-            var speed = RemCon.GetShipVelocities().LinearVelocity;
+            var GravVec = RemCon.GetNaturalGravity();
+            if (!Vector3D.IsZero(GravVec)) GravVec = VectorTransform(-GravVec, MatOrient);
 
+            var PowVector = VectorTransform(speedTarg - speedV, MatOrient);
             //Вектор торможения и доп. силы
-            var stopVector = GetStopPow(VectorTransform(speedTarg, MatOrient)) / mas - GravVec;
-            var PowVector = VectorTransform(speedTarg - speed, MatOrient);
+            speedV = VectorTransform(speedV, MatOrient);
+            txt.Add(PowVector.ToString("PW1:0.##"));
+            var stopVector = GetPow(-PowVector) / mas - GravVec;
 
-            var coof = Math.Max(speed.Length(), 0.001);
-            //coof = (dist / coof - 1) - (coof / stopVector.Length());
+            var pow = GetPow(PowVector) / mas - GravVec;
 
-            //coof = (1 - coof / speedTarg.Length()) - (GetDistStop(speed.Length(), stopVector.Length()) / dist)
-             coof = GetDistStop(speed.Length(), stopVector.Length()) / dist;
+            PowVector = Vector3D.Abs(PowVector).Sum / 100 * PowVector;
+            PowVector /= PowVector.AbsMax();
 
-            txt.AddLine("D:{0:0.00} C:{1:0.0##}\nStop:{2:0.##} c :{3:0.##} м\nS{4}\nS>{5}\nSt{6}\nNs{7}\nNs_{8}",
-                dist, coof, speed.Length() / stopVector.Length(), GetDistStop(speed.Length(), stopVector.Length()), 
-                speed.ToString("0.###"), speedTarg.ToString("0.###"), stopVector.ToString("0.###"), PowVector.ToString("0.###"),
-                (speedTarg - speed).ToString("0.###"));
-           
-            if (dist <= stopVector.Length()) { txt.Add("Disabled " + dist); Stop(); return 0; }
 
-            if (coof < 0.75) PowVector = Vector3D.Normalize(PowVector) * Math.Min((1 - coof) * 100, 100);
+            var powstop = stopVector.Length();
+
+            var coof = !Double.IsNaN(powstop) ? GetDistStop(speed, powstop) / dist : 0;
+            if(coof < 0.75)
+            {
+                txt.Add(stopVector.ToString("0.##"));
+                stopVector = Vector3D.Abs(stopVector).Sum / 100 * stopVector;
+                stopVector /= stopVector.AbsMax();
+            }
+
+            txt.AddLine("D:{0:0.00} C:{1:0.0##} Stop:{2:0.##} c :{3:0.##} м",
+                dist, coof, speed / powstop, GetDistStop(speed, powstop));
+
+            txt.AddLine("Speed{0}" +
+                "\nSTarg{1}" +
+                "\nStop{2} :{3:0.0##}" +
+                "\nPowV{4}" +
+                "\nPow{5}",
+                speedV.ToString("0.###"),
+                speedTarg.ToString("0.###"),
+                stopVector.ToString("0.###"), powstop,
+                PowVector.ToString("0.###"),
+                pow.ToString("0.###"));
+
+
+            //txt.AddLine("S{0}\nS>{1}\nSt{2} :{5:0.0##}\nPw{3}\nGr{4}",
+            //    speedV.ToString("0.###"), speedTarg.ToString("0.###"), stopVector.ToString("0.###"), PowVector.ToString("0.###"),
+            //    pow.ToString("0.###"), powstop);
+
+            if (dist <= powstop) { txt.Add("Disabled " + dist); Stop(); return 0; }
+
+            if (coof < 0.75) PowVector *= (1 - coof);
+            else PowVector = stopVector;
+
+            txt.AddLine("**" + PowVector.ToString("0.000"));
+
+            if(Flag>1) myThr.SetProcThrust(PowVector);
+            return dist;
+        }
+        public double GoToPos2(Vector3D Pos)
+        {
+            var mas = RemCon.CalculateShipMass().TotalMass;
+            Vector3D speedTarg = (Pos - RemCon.GetPosition()),
+            speedV = RemCon.GetShipVelocities().LinearVelocity; //тек. скор
+
+            double dist = speedTarg.Length(), speed = speedV.Length();
+            if (dist > MaxSpeed) speedTarg = Vector3D.Normalize(speedTarg) * MaxSpeed;
+
+            var MatOrient = RemCon.WorldMatrix.GetOrientation();
+            var GravVec = RemCon.GetNaturalGravity();
+            if (!Vector3D.IsZero(GravVec)) GravVec = VectorTransform(-GravVec, MatOrient);
+
+            var PowVector = VectorTransform(speedTarg, MatOrient);
+            //Вектор торможения и доп. силы
+            speedV = VectorTransform(speedV, MatOrient);
+            var stopVector = GetPow(-(speed == 0 ? PowVector : speedV)) / mas - GravVec;
+
+            var powstop = stopVector.Length();
+
+            var coof = !Double.IsNaN(powstop) ? GetDistStop(speed, powstop) / dist : 0;
+
+            txt.AddLine("D:{0:0.00} C:{1:0.0##} Stop:{2:0.##} c :{3:0.##} м",
+                dist, coof, speed / powstop, GetDistStop(speed, powstop));
+
+            txt.AddLine("S{0}\nS>{1}\nSt{2} {5:0.0##}\nPw{3}\nGr{4}",
+                speedV.ToString("0.###"), speedTarg.ToString("0.###"), stopVector.ToString("0.###"), PowVector.ToString("0.###"),
+                (speedTarg - speed).ToString("0.###"), powstop);
+
+            if (myThr.Count > 0) txt.AddLine("1T" + myThr[0].MaxEffectiveThrust / mas);
+
+            if (dist <= powstop) { txt.Add("Disabled " + dist); Stop(); return 0; }
+
+            if (coof < 0.75) PowVector = Vector3D.Normalize(PowVector - speedV) * Math.Min((1 - coof) * 100, 100);
             else PowVector = Vector3D.Normalize(stopVector) * Math.Min(coof * 100, 100);
 
             PowVector /= 100;
             txt.AddLine("Rvu" + PowVector.ToString("0.000"));
 
-            myThr.SetProcThrust(PowVector);
+            if (Flag > 1) myThr.SetProcThrust(PowVector);
             return dist;
         }
 
@@ -468,7 +495,7 @@ class Program : MyGridProgram
 
             public void SetThrust(Vector3D ThrVec)
             {
-                this.ForEach(x => x.ThrustOverride = 0f);
+                this.ForEach(x => x.ThrustOverride = 0);
                 var mas = RemCon.CalculateShipMass().TotalMass;
 
                 ThrVec.X = ThrVec.X / (ThrVec.X > 0 ? RightThrusters : LeftThrusters).EffectivePow;
@@ -480,7 +507,7 @@ class Program : MyGridProgram
 
             public void SetProcThrust(Vector3 ThrVec)
             {
-                ForEach(x=>x.ThrustOverride = 0f);
+                ForEach(x=>x.ThrustOverride = 0);
                 //X
                 if (ThrVec.X > 0) RightThrusters.ForEach(x => x.ThrustOverridePercentage = ThrVec.X);
                 else LeftThrusters.ForEach(x => x.ThrustOverridePercentage = -ThrVec.X);
