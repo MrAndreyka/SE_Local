@@ -179,11 +179,12 @@
                         {
                             Data.Sun_Aix = Vector3D.Normalize(tmp);
                             if (ss.GetLength(0) > 1)
-                                if (Vector3D.TryParse(ss[1], out tmp))
+                                if (MyGPS.TryParseVers(ss[1], out tmp))
                                     Data.Sun_Aix = Vector3D.Normalize(Data.Sun_Aix.Cross(Vector3D.Normalize(tmp)));
+								else TextOut($"Ошиба значения вектора: {ss[1]}");
                             TextOut("Установлена: " + V3DToStr(tmp, "Ось солнца", 50000));
                         }
-                        else TextOut("Ошиба значения вектора");
+                        else TextOut($"Ошиба значения вектора: {ss[0]}");
                     }
                     break;
                 case "start":
